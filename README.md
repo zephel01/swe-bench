@@ -136,6 +136,8 @@ swe-bench/
 
 ## 🧩 タスクの追加
 
+> 📋 同梱15タスクの詳細仕様 (調査対象・採点基準) は **[TASKS.md](TASKS.md)** を参照。
+
 ```
 tasks/tXXX_name/
 ├── issue.md        # 英語バグレポート
