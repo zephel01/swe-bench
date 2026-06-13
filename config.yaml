@@ -47,6 +47,7 @@ run:
   workdir: null           # 一時作業ディレクトリ (null = システムtemp配下)
   runs: 1                 # 各タスクの試行回数 (>1 で pass@k・成功率を計測)
   sample_temp: 0.8        # 複数試行(runs>1)時のサンプリング温度
+  # ollama_host: "http://localhost:11434"  # Ollama接続先 (config未定義モデルの自動解決に使用)
 
 quality:
   ruff:

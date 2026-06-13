@@ -15,6 +15,7 @@ from pathlib import Path
 
 import yaml
 
+from .clients.ollama import list_ollama_models
 from .runner import BenchmarkRunner, save_run
 from .tasks import load_tasks
 
@@ -43,22 +44,59 @@ def cmd_list_tasks(args) -> int:
     return 0
 
 
+def cmd_models(args) -> int:
+    """利用可能なモデルを一覧する (config定義 + Ollama稼働モデル)."""
+    config = _load_config(args.config)
+    models = config.get("models", {})
+    print("=== config.yaml 定義モデル ===")
+    if models:
+        for k, v in models.items():
+            extra = f", model={v['model']}" if v.get("model") else ""
+            print(f"  {k:14s} (type={v.get('type', '?')}{extra})")
+    else:
+        print("  (なし)")
+
+    if args.ollama_host:
+        config.setdefault("run", {})["ollama_host"] = args.ollama_host
+    host = BenchmarkRunner(config, Path(args.tasks_dir)).ollama_host()
+    print(f"\n=== Ollama 稼働モデル ({host}) ===")
+    try:
+        names = list_ollama_models(host)
+    except Exception as e:
+        print(f"  ⚠️ Ollamaに接続できません: {e}")
+        print("  (Ollamaを起動すると、ここのモデルを --model で直接指定できます)")
+        return 0
+    if names:
+        for n in names:
+            print(f"  {n}")
+        print("  → config未定義でも `--model <名前>` でそのまま実行できます")
+    else:
+        print("  (インストール済みモデルなし。`ollama pull <model>` で追加)")
+    return 0
+
+
 def cmd_run(args) -> int:
     config = _load_config(args.config)
     if args.lang:
         config.setdefault("run", {})["issue_lang"] = args.lang
+    if getattr(args, "ollama_host", None):
+        config.setdefault("run", {})["ollama_host"] = args.ollama_host
     runner = BenchmarkRunner(config, Path(args.tasks_dir))
     only = args.tasks.split(",") if args.tasks else None
-    run = runner.run(
-        args.model, only_tasks=only,
-        runs=args.runs, sample_temp=args.sample_temp,
-    )
+    try:
+        run = runner.run(
+            args.model, only_tasks=only,
+            runs=args.runs, sample_temp=args.sample_temp,
+        )
+    except ValueError as e:  # モデル解決失敗などは見やすく表示
+        print(f"❌ {e}", file=sys.stderr)
+        return 2
     json_path, md_path = save_run(run, Path(args.output))
     print()
     print(f"Resolved率   : {run.resolved_rate * 100:.1f}%")
     if run.multi_run:
-        print(f"平均成功率   : {run.avg_success_rate * 100:.1f}% (×{run.runs}試行)")
-        print(f"平均pass@{run.runs}  : {run.avg_pass_at_k * 100:.1f}%")
+        print(f"平均成功率   : {run.avg_success_rate * 100:.1f}% (pass@1 ×{run.runs})")
+        print(f"≥1成功タスク : {run.solved_any_rate * 100:.1f}%")
     print(f"品質平均     : {run.avg_quality_resolved:.1f}/100 (resolvedのみ)")
     print(f"Combined平均 : {run.avg_combined:.1f}/100")
     print(f"結果: {json_path}")
@@ -116,6 +154,12 @@ def main() -> None:
     _common_args(p_list)
     p_list.set_defaults(fn=cmd_list_tasks)
 
+    p_models = sub.add_parser("models", help="モデル一覧 (config + Ollama稼働)")
+    _common_args(p_models)
+    p_models.add_argument("--ollama-host", default=None, dest="ollama_host",
+                          help="Ollama接続先 (既定: configまたはhttp://localhost:11434)")
+    p_models.set_defaults(fn=cmd_models)
+
     p_run = sub.add_parser("run", help="ベンチマーク実行")
     _common_args(p_run)
     p_run.add_argument("--model", required=True, help="config.yamlのモデル名")
@@ -130,6 +174,8 @@ def main() -> None:
         "--sample-temp", type=float, default=None, dest="sample_temp",
         help="複数試行時のサンプリング温度 (既定: configのrun.sample_temp または0.8)",
     )
+    p_run.add_argument("--ollama-host", default=None, dest="ollama_host",
+                       help="Ollama接続先 (config未定義モデルの自動解決に使用)")
     p_run.set_defaults(fn=cmd_run)
 
     p_cmp = sub.add_parser("compare", help="複数 results.json を横断比較")

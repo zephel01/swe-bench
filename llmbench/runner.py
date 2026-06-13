@@ -15,6 +15,7 @@ from pathlib import Path
 from . import sandbox, usability
 from .clients import LLMClient, create_client
 from .clients.mock import MockClient
+from .clients.ollama import DEFAULT_OLLAMA_HOST, list_ollama_models
 from .functional import evaluate_functional
 from .patch import parse_llm_output
 from .prompts import SYSTEM_PROMPT, build_user_prompt
@@ -114,6 +115,13 @@ class RunResult:
         return sum(r.pass_at_k for r in self.results) / len(self.results)
 
     @property
+    def solved_any_rate(self) -> float:
+        """N回中1回でも成功したタスクの割合 (再試行込みで到達可能か)."""
+        if not self.results:
+            return 0.0
+        return sum(1 for r in self.results if r.n_pass > 0) / len(self.results)
+
+    @property
     def avg_quality_resolved(self) -> float:
         """resolvedになったタスクのみの品質平均."""
         rs = [r.quality_score for r in self.results if r.resolved]
@@ -139,6 +147,53 @@ class BenchmarkRunner:
             Path(wd) if wd else Path(tempfile.gettempdir()) / "llmbench_work"
         )
 
+    def ollama_host(self) -> str:
+        """Ollama接続先: 明示設定 > configのollamaモデル > 既定."""
+        h = self.run_cfg.get("ollama_host")
+        if h:
+            return h
+        for v in self.config.get("models", {}).values():
+            if v.get("type") == "ollama" and v.get("base_url"):
+                return v["base_url"]
+        return DEFAULT_OLLAMA_HOST
+
+    def _ollama_template(self) -> dict:
+        """configにある最初のollamaモデルから共通パラメータを借用する."""
+        for v in self.config.get("models", {}).values():
+            if v.get("type") == "ollama":
+                return {
+                    k: v[k] for k in ("temperature", "max_tokens", "timeout")
+                    if k in v
+                }
+        return {}
+
+    def resolve_model(self, name: str) -> dict:
+        """モデル名をconfig、無ければOllamaの稼働モデルから解決する.
+
+        config未定義でもOllamaにインストール済みなら、その場でollama
+        クライアント設定を合成して返す。
+        """
+        models = self.config.get("models", {})
+        if name in models:
+            return models[name]
+        host = self.ollama_host()
+        try:
+            available = list_ollama_models(host)
+        except Exception as e:  # Ollama未起動など
+            raise ValueError(
+                f"モデル {name!r} はconfig未定義で、"
+                f"Ollama ({host}) にも接続できません: {e}\n"
+                f"  config定義: {list(models)}"
+            ) from e
+        if name in available:
+            return {**self._ollama_template(), "type": "ollama",
+                    "base_url": host, "model": name}
+        raise ValueError(
+            f"モデル {name!r} はconfig未定義で、"
+            f"Ollama ({host}) にも未インストールです。\n"
+            f"  config定義: {list(models)}\n  Ollama稼働: {available}"
+        )
+
     def _make_reviewer(self) -> LLMClient | None:
         cfg = self.quality_cfg.get("llm_review", {})
         if not cfg.get("enabled", False):
@@ -157,12 +212,7 @@ class BenchmarkRunner:
         runs: int | None = None,
         sample_temp: float | None = None,
     ) -> RunResult:
-        models = self.config.get("models", {})
-        if model_name not in models:
-            raise ValueError(
-                f"model {model_name!r} not found. available: {list(models)}"
-            )
-        client = create_client(model_name, models[model_name])
+        client = create_client(model_name, self.resolve_model(model_name))
         reviewer = self._make_reviewer()
         lang = self.run_cfg.get("issue_lang", "en")
         timeout = int(self.run_cfg.get("test_timeout", 120))
@@ -440,7 +490,10 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
         "usability": {t: overall.get(t, 0) for t in usability.TIERS},
     }
     if run.multi_run:
+        # avg_success_rate=平均pass@1, solved_any_rate=N回中≥1成功
+        # avg_pass_at_k は k=runs のとき退化する点に注意
         summary["avg_success_rate"] = round(run.avg_success_rate, 3)
+        summary["solved_any_rate"] = round(run.solved_any_rate, 3)
         summary["avg_pass_at_k"] = round(run.avg_pass_at_k, 3)
 
     payload = {

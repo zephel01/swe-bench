@@ -71,15 +71,35 @@ def _usability_section(run) -> list[str]:
             f"| {diff} | {c.get('autonomous', 0)} | "
             f"{c.get('assisted', 0)} | {c.get('unusable', 0)} |"
         )
-    # 総合判定 (難易度ごとの最多ティア)
-    verdicts = []
+    # 難易度別の割合 (最頻ティアでの楽観的な丸めを避け、分布を明示)
+    def _pct(c, key):
+        tot = sum(c.values()) or 1
+        return c.get(key, 0) / tot * 100
+
+    lines += ["", "**難易度別の内訳（割合）**", ""]
     for diff in ("easy", "medium", "hard"):
         if diff not in by_diff:
             continue
-        top = by_diff[diff].most_common(1)[0][0]
-        verdicts.append(f"{diff}={usability.TIER_LABEL[top]}")
-    if verdicts:
-        lines += ["", f"> 総合: {' / '.join(verdicts)}"]
+        c = by_diff[diff]
+        lines.append(
+            f"- {diff}: 🟢自律 {_pct(c, 'autonomous'):.0f}% / "
+            f"🟡補助 {_pct(c, 'assisted'):.0f}% / "
+            f"🔴不可 {_pct(c, 'unusable'):.0f}%"
+        )
+
+    # 全体の保守的な推奨 (不可があれば自律と言い切らない)
+    un = overall.get("unusable", 0)
+    assisted = overall.get("assisted", 0)
+    un_pct = (un / n * 100) if n else 0
+    if un == 0 and assisted == 0:
+        rec = "ほぼ自律で運用可"
+    elif un_pct < 10:
+        rec = f"おおむね自律。ただし🔴不可 {un}/{n} ({un_pct:.0f}%) は要注意"
+    elif un_pct < 30:
+        rec = f"補助つき運用が無難（🔴不可 {un}/{n} = {un_pct:.0f}%）"
+    else:
+        rec = f"このタスク群では限定的（🔴不可 {un}/{n} = {un_pct:.0f}%）"
+    lines += ["", f"> 総合推奨: {rec}"]
     lines.append("")
     return lines
 
@@ -102,15 +122,24 @@ def render_markdown(run) -> str:
         f"({n_resolved}/{n}) |",
     ]
     if multi:
+        n_any = sum(1 for r in run.results if r.n_pass > 0)
         lines += [
-            f"| 🎲 平均成功率 (×{run.runs}) | **{run.avg_success_rate * 100:.1f}%** |",
-            f"| 🔁 平均pass@{run.runs} | **{run.avg_pass_at_k * 100:.1f}%** |",
+            f"| 🎲 平均成功率 (pass@1, ×{run.runs}) | "
+            f"**{run.avg_success_rate * 100:.1f}%** |",
+            f"| 🔁 ≥1成功できたタスク | "
+            f"**{run.solved_any_rate * 100:.1f}%** ({n_any}/{n}) |",
         ]
     lines += [
         f"| 🏅 品質平均 (resolvedのみ) | **{run.avg_quality_resolved:.1f} / 100** |",
         f"| 🎯 Combined平均 | **{run.avg_combined:.1f} / 100** |",
         "",
     ]
+    if multi:
+        lines += [
+            "> 成功率 (pass@1) = 1回試行で通る期待値＝**信頼性の主指標**。"
+            "≥1成功 = N回中1回でも通ったか（再試行込みの到達可能性）。",
+            "",
+        ]
     # usability判定 (サマリ直下)
     lines += _usability_section(run)
 
@@ -136,7 +165,8 @@ def render_markdown(run) -> str:
         files = ", ".join(f"`{f}`" for f in r.changed_files) or "—"
         note = r.fail_reason or (r.parse_error if not r.parse_ok else "") or "—"
         rel_c = (
-            f"| {r.n_pass}/{r.runs} (p@{r.runs}={r.pass_at_k:.2f}) " if multi else ""
+            f"| {r.n_pass}/{r.runs} (成功率{r.success_rate * 100:.0f}%) "
+            if multi else ""
         )
         lines.append(
             f"| {_status_icon(r)} | {r.task_id} | {r.difficulty} "
@@ -172,9 +202,11 @@ def render_markdown(run) -> str:
             + f" / usability: {usability.TIER_LABEL.get(r.usability_tier, '—')}"
         )
         if multi:
+            anymark = "✓" if r.n_pass > 0 else "✗"
             lines.append(
                 f"- 信頼性: 成功 {r.n_pass}/{r.runs} "
-                f"(pass@1={r.pass_at_1:.2f}, pass@{r.runs}={r.pass_at_k:.2f})"
+                f"（成功率 {r.success_rate * 100:.0f}% = pass@1） / "
+                f"{r.runs}回中≥1成功: {anymark}"
             )
         if not r.parse_ok:
             lines.append(f"- ⚠️ パース失敗: {r.parse_error or '不明'}")
@@ -184,11 +216,20 @@ def render_markdown(run) -> str:
             lines.append(
                 f"- 生成物: `{run.artifacts_dirname}/{r.task_id}/`"
             )
-        # 品質内訳
-        for name, comp in r.quality_components.items():
-            if not comp.get("enabled"):
-                continue
-            lines.append(f"- {name}: {_fmt_component(name, comp)}")
+        # 品質内訳 (複数試行では代表1試行の値である点を明記)
+        if r.quality_components and any(
+            c.get("enabled") for c in r.quality_components.values()
+        ):
+            if multi:
+                lines.append(
+                    f"- 品質内訳（下記は**代表1試行**の値。"
+                    f"上のQuality {r.quality_score:.0f} は{r.runs}試行の平均）:"
+                )
+            for name, comp in r.quality_components.items():
+                if not comp.get("enabled"):
+                    continue
+                prefix = "  - " if multi else "- "
+                lines.append(f"{prefix}{name}: {_fmt_component(name, comp)}")
         lines.append("")
 
     return "\n".join(lines) + "\n"

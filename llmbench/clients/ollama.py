@@ -6,6 +6,22 @@ import requests
 
 from .base import GenerationResult, LLMClient
 
+DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+
+
+def list_ollama_models(
+    base_url: str = DEFAULT_OLLAMA_HOST, timeout: float = 5.0
+) -> list[str]:
+    """Ollamaにインストール済みのモデル名一覧を返す (/api/tags).
+
+    接続できない場合は requests の例外を送出する (呼び出し側で握る)。
+    """
+    url = base_url.rstrip("/") + "/api/tags"
+    resp = requests.get(url, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+    return sorted(m["name"] for m in data.get("models", []) if m.get("name"))
+
 
 class OllamaClient(LLMClient):
     def __init__(self, name: str, cfg: dict):
