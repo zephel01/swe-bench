@@ -49,14 +49,33 @@ def cmd_run(args) -> int:
         config.setdefault("run", {})["issue_lang"] = args.lang
     runner = BenchmarkRunner(config, Path(args.tasks_dir))
     only = args.tasks.split(",") if args.tasks else None
-    run = runner.run(args.model, only_tasks=only)
+    run = runner.run(
+        args.model, only_tasks=only,
+        runs=args.runs, sample_temp=args.sample_temp,
+    )
     json_path, md_path = save_run(run, Path(args.output))
     print()
     print(f"Resolved率   : {run.resolved_rate * 100:.1f}%")
+    if run.multi_run:
+        print(f"平均成功率   : {run.avg_success_rate * 100:.1f}% (×{run.runs}試行)")
+        print(f"平均pass@{run.runs}  : {run.avg_pass_at_k * 100:.1f}%")
     print(f"品質平均     : {run.avg_quality_resolved:.1f}/100 (resolvedのみ)")
     print(f"Combined平均 : {run.avg_combined:.1f}/100")
     print(f"結果: {json_path}")
     print(f"レポート: {md_path}")
+    return 0
+
+
+def cmd_compare(args) -> int:
+    """複数の results.json を横断比較するレポートを生成する."""
+    from .compare import load_results, save_comparison
+
+    paths = args.results
+    if len(paths) < 2:
+        print("⚠️  比較には2つ以上の results.json を推奨します。", file=sys.stderr)
+    runs = load_results(paths)
+    out = save_comparison(runs, Path(args.output), name=args.name)
+    print(f"比較レポート: {out}")
     return 0
 
 
@@ -103,7 +122,21 @@ def main() -> None:
     p_run.add_argument("--lang", choices=["en", "ja"], default=None,
                        help="issue言語 (configを上書き)")
     p_run.add_argument("--output", default="results", help="結果出力先")
+    p_run.add_argument(
+        "--runs", type=int, default=None,
+        help="各タスクの試行回数 (>1 で pass@k計測。既定: run.runs または1)",
+    )
+    p_run.add_argument(
+        "--sample-temp", type=float, default=None, dest="sample_temp",
+        help="複数試行時のサンプリング温度 (既定: configのrun.sample_temp または0.8)",
+    )
     p_run.set_defaults(fn=cmd_run)
+
+    p_cmp = sub.add_parser("compare", help="複数 results.json を横断比較")
+    p_cmp.add_argument("results", nargs="+", help="比較する results.json (2つ以上)")
+    p_cmp.add_argument("--output", default="results", help="比較レポート出力先")
+    p_cmp.add_argument("--name", default="comparison", help="出力名プレフィックス")
+    p_cmp.set_defaults(fn=cmd_compare)
 
     p_val = sub.add_parser("validate", help="モックで自己検証")
     _common_args(p_val)
