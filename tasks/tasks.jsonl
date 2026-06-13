@@ -1,0 +1,15 @@
+{"task_id": "t001", "dir": "t001_sum_range", "difficulty": "easy", "title": "sum_to_n returns wrong total"}
+{"task_id": "t002", "dir": "t002_clamp", "difficulty": "easy", "title": "clamp returns high bound for small values"}
+{"task_id": "t003", "dir": "t003_tags", "difficulty": "easy", "title": "add_tag leaks tags across calls"}
+{"task_id": "t004", "dir": "t004_palindrome", "difficulty": "easy", "title": "is_palindrome ignores documented normalization"}
+{"task_id": "t005", "dir": "t005_stats", "difficulty": "easy", "title": "average crashes on empty input"}
+{"task_id": "t006", "dir": "t006_calendar_utils", "difficulty": "medium", "title": "is_leap_year wrong for century years"}
+{"task_id": "t007", "dir": "t007_word_freq", "difficulty": "medium", "title": "word_frequencies treats Word/word as different"}
+{"task_id": "t008", "dir": "t008_search", "difficulty": "medium", "title": "binary_search returns wrong value for missing targets"}
+{"task_id": "t009", "dir": "t009_fib", "difficulty": "medium", "title": "fibonacci wrong from the 2nd term onward"}
+{"task_id": "t010", "dir": "t010_csv_line", "difficulty": "medium", "title": "parse_csv_line breaks quoted fields"}
+{"task_id": "t011", "dir": "t011_lru", "difficulty": "hard", "title": "LRUCache evicts the wrong entry"}
+{"task_id": "t012", "dir": "t012_cart", "difficulty": "hard", "title": "Cart.total_with_discount returns the discount, not the total"}
+{"task_id": "t013", "dir": "t013_ratelimit", "difficulty": "hard", "title": "Rate limiter allows one request too many"}
+{"task_id": "t014", "dir": "t014_scheduler", "difficulty": "hard", "title": "Scheduler runs low-priority jobs first"}
+{"task_id": "t015", "dir": "t015_confmerge", "difficulty": "hard", "title": "merge_config wipes nested default sections"}

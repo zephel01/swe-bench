@@ -1,0 +1,22 @@
+[project]
+name = "llmbench"
+version = "0.1.0"
+description = "Local LLM coding benchmark: SWE-Bench-style functional correctness + code quality layer"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+    "requests>=2.28",
+    "ruff>=0.4",
+    "radon>=6.0",
+    "pytest>=7.0",
+]
+
+[project.scripts]
+llmbench = "llmbench.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["llmbench*"]

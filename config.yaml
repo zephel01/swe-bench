@@ -1,0 +1,68 @@
+# llmbench 設定ファイル
+# モデル定義・スコア重み・実行パラメータをここで一元管理する
+
+models:
+  # OpenAI互換API (llama.cpp server / LM Studio / vLLM / text-generation-webui)
+  local-openai:
+    type: openai
+    base_url: "http://localhost:8080/v1"
+    model: "qwen2.5-coder-32b-instruct"   # サーバ側のモデル名
+    api_key: "sk-local"                    # ローカルはダミーでOK
+    temperature: 0.2
+    max_tokens: 4096
+    timeout: 600
+
+  # Ollama
+  local-ollama:
+    type: ollama
+    base_url: "http://localhost:11434"
+    model: "qwen2.5-coder:32b"
+    temperature: 0.2
+    max_tokens: 4096
+    timeout: 600
+
+  # 検証用モック (gold patchをそのまま返す / 壊れた出力を返す)
+  mock-gold:
+    type: mock
+    mode: gold
+  mock-broken:
+    type: mock
+    mode: broken
+
+run:
+  issue_lang: en          # en | ja  (language tax検証はjaに切替えて再実行)
+  test_timeout: 120       # pytest実行のタイムアウト(秒/タスク)
+  generate_retries: 1     # パース失敗時の再生成回数
+  workdir: null           # 一時作業ディレクトリ (null = システムtemp配下)
+
+quality:
+  ruff:
+    enabled: true
+    weight: 0.4
+    # スコア = max(0, 100 - penalty_per_issue * issues密度(100行あたり))
+    penalty_per_issue: 8
+  complexity:
+    enabled: true
+    weight: 0.3
+    # radon Maintainability Index (0-100) をベースに、CCランクで減点
+    cc_penalty:           # 関数の最悪CCランクごとの減点
+      A: 0
+      B: 5
+      C: 15
+      D: 30
+      E: 45
+      F: 60
+  llm_review:
+    enabled: false        # レビュー用モデルを起動しているときに true
+    weight: 0.3
+    reviewer_model: local-openai   # models: のキーを指定
+  sonarqube:
+    enabled: false        # SonarQubeサーバ稼働時のみ true
+    weight: 0.0           # 有効化時に重みを再配分すること
+    host_url: "http://localhost:9000"
+    token: ""
+
+scoring:
+  # combined = resolved * (floor + (1 - floor) * quality / 100)
+  # 動かないコードは0点。動くコードは品質で floor*100 〜 100 点に分布
+  quality_floor: 0.5

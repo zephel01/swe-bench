@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# 仮想環境
+.venv/
+venv/
+
+# ツールキャッシュ
+.ruff_cache/
+.pytest_cache/
+
+# ベンチマーク出力・一時ファイル
+results/
+llmbench_work/
+.llmbench_work/
+
+# ローカル作業フォルダ (公開対象外)
+_OUTPUTS/
+
+# OS
+.DS_Store
