@@ -5,8 +5,8 @@ models:
   # OpenAI互換API (llama.cpp server / LM Studio / vLLM / text-generation-webui)
   local-openai:
     type: openai
-    base_url: "http://localhost:8080/v1"
-    model: "qwen2.5-coder-32b-instruct"   # サーバ側のモデル名
+    base_url: "http://localhost:8085/v1"
+    model: "Qwopus3.6-27B-Coder-MTP"   # サーバ側のモデル名
     api_key: "sk-local"                    # ローカルはダミーでOK
     temperature: 0.2
     max_tokens: 4096
@@ -17,6 +17,17 @@ models:
     type: ollama
     base_url: "http://localhost:11434"
     model: "qwen2.5-coder:32b"
+    temperature: 0.2
+    max_tokens: 4096
+    timeout: 600
+
+  # 参照モデル (compareのアンカー用)。APIキーは環境変数で渡すこと。
+  # 使い方: export OPENAI_API_KEY=sk-... して `llmbench run --model ref-gpt`
+  ref-gpt:
+    type: openai
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o"
+    api_key: "${OPENAI_API_KEY}"        # ${VAR} は環境変数から展開される
     temperature: 0.2
     max_tokens: 4096
     timeout: 600
@@ -34,6 +45,8 @@ run:
   test_timeout: 120       # pytest実行のタイムアウト(秒/タスク)
   generate_retries: 1     # パース失敗時の再生成回数
   workdir: null           # 一時作業ディレクトリ (null = システムtemp配下)
+  runs: 1                 # 各タスクの試行回数 (>1 で pass@k・成功率を計測)
+  sample_temp: 0.8        # 複数試行(runs>1)時のサンプリング温度
 
 quality:
   ruff:
@@ -63,6 +76,14 @@ quality:
     token: ""
 
 scoring:
-  # combined = resolved * (floor + (1 - floor) * quality / 100)
+  # combined = success_rate * (floor + (1 - floor) * quality / 100)
   # 動かないコードは0点。動くコードは品質で floor*100 〜 100 点に分布
+  # (runs>1 では resolved の代わりに success_rate でスケールする)
   quality_floor: 0.5
+
+usability:
+  # success_rate と quality からタスクを「自律 / 補助 / 不可」に分類する。
+  # runs=1 のとき success_rate は 0/1 (= resolved)。
+  autonomous: {min_success: 0.9, min_quality: 80}   # レビューほぼ不要で任せられる
+  assisted:   {min_success: 0.6, min_quality: 0}    # レビュー前提なら使える
+  # 上記いずれにも満たないものは unusable (不可)

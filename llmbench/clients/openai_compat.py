@@ -1,10 +1,23 @@
-"""OpenAI互換API クライアント (llama.cpp server / LM Studio / vLLM など)."""
+"""OpenAI互換API クライアント (llama.cpp server / LM Studio / vLLM / API など)."""
 
 from __future__ import annotations
+
+import os
 
 import requests
 
 from .base import GenerationResult, LLMClient
+
+
+def _expand_env(value: str) -> str:
+    """${VAR} / $VAR を環境変数から展開する (APIキーをconfigに直書きしないため)."""
+    if not isinstance(value, str):
+        return value
+    if value.startswith("${") and value.endswith("}"):
+        return os.environ.get(value[2:-1], "")
+    if value.startswith("$"):
+        return os.environ.get(value[1:], "")
+    return value
 
 
 class OpenAICompatClient(LLMClient):
@@ -12,7 +25,7 @@ class OpenAICompatClient(LLMClient):
         super().__init__(name, cfg)
         self.base_url = cfg["base_url"].rstrip("/")
         self.model = cfg["model"]
-        self.api_key = cfg.get("api_key", "sk-local")
+        self.api_key = _expand_env(cfg.get("api_key", "sk-local"))
 
     def _generate(self, system: str, user: str) -> GenerationResult:
         resp = requests.post(

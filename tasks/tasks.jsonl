@@ -13,3 +13,8 @@
 {"task_id": "t013", "dir": "t013_ratelimit", "difficulty": "hard", "title": "Rate limiter allows one request too many"}
 {"task_id": "t014", "dir": "t014_scheduler", "difficulty": "hard", "title": "Scheduler runs low-priority jobs first"}
 {"task_id": "t015", "dir": "t015_confmerge", "difficulty": "hard", "title": "merge_config wipes nested default sections"}
+{"task_id": "t016", "dir": "t016_temps", "difficulty": "hard", "title": "daily_summary: wrong conversion and None handling (multi-file)"}
+{"task_id": "t017", "dir": "t017_slug", "difficulty": "hard", "title": "slugify leaves junk and bad hyphens (ambiguous spec)"}
+{"task_id": "t018", "dir": "t018_registry", "difficulty": "hard", "title": "registry stores name instead of function"}
+{"task_id": "t019", "dir": "t019_trie", "difficulty": "hard", "title": "trie treats prefixes as stored words"}
+{"task_id": "t020", "dir": "t020_calc", "difficulty": "hard", "title": "calculator ignores precedence and parentheses"}
