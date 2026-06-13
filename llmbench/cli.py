@@ -87,6 +87,7 @@ def cmd_run(args) -> int:
         run = runner.run(
             args.model, only_tasks=only,
             runs=args.runs, sample_temp=args.sample_temp,
+            label=args.label,
         )
     except ValueError as e:  # モデル解決失敗などは見やすく表示
         print(f"❌ {e}", file=sys.stderr)
@@ -176,6 +177,8 @@ def main() -> None:
     )
     p_run.add_argument("--ollama-host", default=None, dest="ollama_host",
                        help="Ollama接続先 (config未定義モデルの自動解決に使用)")
+    p_run.add_argument("--label", default=None,
+                       help="結果ラベルを明示指定 (既定: model:auto時はサーバ検出名)")
     p_run.set_defaults(fn=cmd_run)
 
     p_cmp = sub.add_parser("compare", help="複数 results.json を横断比較")

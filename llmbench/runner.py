@@ -211,6 +211,7 @@ class BenchmarkRunner:
         progress=print,
         runs: int | None = None,
         sample_temp: float | None = None,
+        label: str | None = None,
     ) -> RunResult:
         client = create_client(model_name, self.resolve_model(model_name))
         reviewer = self._make_reviewer()
@@ -226,8 +227,18 @@ class BenchmarkRunner:
             )
             client.temperature = float(st)
 
+        # ラベル: --label > サーバ自動検出(model:auto) > config キー名
+        served = getattr(client, "served_model_name", None)
+        if label:
+            run_label = label
+        elif served:
+            run_label = _label_from_model(served)
+            progress(f"検出モデル: {served} (config未編集で自動採用)")
+        else:
+            run_label = model_name
+
         tasks = load_tasks(self.tasks_root, only=only_tasks)
-        run = RunResult(model=model_name, issue_lang=lang, runs=runs)
+        run = RunResult(model=run_label, issue_lang=lang, runs=runs)
 
         for i, task in enumerate(tasks, 1):
             progress(
@@ -384,6 +395,14 @@ def _aggregate_attempts(
         }
         for a in attempts
     ]
+
+
+def _label_from_model(name: str) -> str:
+    """サーバ報告のモデル名を結果ラベル用に整える (パス/.gguf除去)."""
+    name = name.rsplit("/", 1)[-1]
+    if name.endswith(".gguf"):
+        name = name[:-5]
+    return name
 
 
 def _snippet(text: str, n: int = 3) -> str:

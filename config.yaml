@@ -6,7 +6,7 @@ models:
   local-openai:
     type: openai
     base_url: "http://localhost:8085/v1"
-    model: "Qwopus3.6-27B-Coder-MTP"   # サーバ側のモデル名
+    model: "auto"   # auto = サーバ(/v1/models)のロード中モデルを自動採用。ggufを差し替えてもconfig編集不要
     api_key: "sk-local"                    # ローカルはダミーでOK
     temperature: 0.2
     max_tokens: 4096

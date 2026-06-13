@@ -20,12 +20,44 @@ def _expand_env(value: str) -> str:
     return value
 
 
+def fetch_served_model(base_url: str, api_key: str | None = None,
+                       timeout: float = 5.0) -> str:
+    """サーバが現在ロードしているモデル名を /v1/models から取得する.
+
+    base_url は .../v1 を含む前提 (例 http://localhost:8085/v1)。
+    """
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    resp = requests.get(
+        base_url.rstrip("/") + "/models", headers=headers, timeout=timeout
+    )
+    resp.raise_for_status()
+    items = resp.json().get("data") or []
+    if not items:
+        raise RuntimeError("サーバがモデルを返しませんでした (/v1/models が空)")
+    return items[0].get("id") or items[0].get("model") or ""
+
+
 class OpenAICompatClient(LLMClient):
     def __init__(self, name: str, cfg: dict):
         super().__init__(name, cfg)
         self.base_url = cfg["base_url"].rstrip("/")
-        self.model = cfg["model"]
         self.api_key = _expand_env(cfg.get("api_key", "sk-local"))
+        # model: auto / 空 のときはサーバのロード中モデルを自動採用する
+        raw_model = (_expand_env(cfg.get("model", "")) or "").strip()
+        self.served_model_name: str | None = None
+        if raw_model.lower() in ("", "auto"):
+            try:
+                self.served_model_name = fetch_served_model(
+                    self.base_url, self.api_key
+                )
+            except Exception as e:
+                raise ValueError(
+                    f"model: auto ですが {self.base_url}/models から"
+                    f"モデル名を取得できません: {e}"
+                ) from e
+            self.model = self.served_model_name
+        else:
+            self.model = raw_model
 
     def _generate(self, system: str, user: str) -> GenerationResult:
         resp = requests.post(
