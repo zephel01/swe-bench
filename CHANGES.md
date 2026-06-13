@@ -1,7 +1,8 @@
-# 🆕 llmbench 機能追加（「実際どれくらい使えるか」を測る4機能）
+# 🆕 llmbench 機能追加（「実際どれくらい使えるか」を測る）
 
 「ベンチのスコアは出るが、実際どれくらい使えるか分かりづらい」を解消するため、
-**参照モデル比較 / pass@k信頼性 / usabilityティア / 難タスク** の4つを追加しました。
+**参照モデル比較 / pass@k信頼性 / usabilityティア / 難タスク** の4機能を追加し、
+さらに **モデル運用の簡素化（model:auto・Ollama動的）** と **レポート表示の改善** を加えました。
 
 > 本ファイルは新機能の要約・使い方・検証結果です。
 > 詳しい運用は `MANUAL.md`（既存）、利用手順は `USAGE.md` を参照。
@@ -79,10 +80,31 @@ usability:
 
 ---
 
+## ⑤ モデル運用の簡素化（config編集レス）
+
+ggufやモデルを差し替えるたびに `config.yaml` を書き換える手間をなくしました。
+
+- **`model: auto`** — 起動時に `/v1/models` からサーバのロード中モデルを自動採用。
+  レポート/結果ファイルも**その実モデル名でラベル**（`.gguf` は除去）。
+- **Ollama動的選択** — config未定義でも `--model <インストール済み名>` を直接指定可
+  （`/api/tags` から自動解決）。`llmbench models` で config + Ollama稼働モデルを一覧。
+- **`--label <名前>`** — ラベルを明示固定したいとき。
+- **APIキーの環境変数展開** — `api_key: "${OPENAI_API_KEY}"` で直書き回避。
+
+## ⑥ レポートの信頼性表示を改善（誤読の解消）
+
+- **pass@1（成功率）を主指標化** — `pass@5` は k=runs で退化（1回でも通れば1.0）し
+  誤解を生むため撤去。「平均成功率(pass@1)」と「≥1成功できたタスク」を分離表示。
+- **総合判定を保守的に** — 最頻ティアでの楽観表示をやめ、難易度別の割合＋
+  「🔴不可が1つでもあれば自律と言い切らない」推奨に変更。
+- **品質内訳に注記** — 多試行時、内訳は代表1試行・Qualityは平均である旨を明示。
+
+---
+
 ## 変更ファイル
 
 追加: `llmbench/usability.py`, `llmbench/compare.py`, `tasks/t016_temps〜t020_calc/`
-変更: `llmbench/{runner,report,scoring,cli}.py`, `llmbench/clients/openai_compat.py`, `config.yaml`
+変更: `llmbench/{runner,report,scoring,cli}.py`, `llmbench/clients/{openai_compat,ollama}.py`, `config.yaml`
 
 ## 検証結果（すべてPASS）
 
@@ -91,17 +113,14 @@ usability:
 - pass@k単体 … 後方互換（`combined(True,88.6)=94.3`）、不偏推定量の値、flaky/不可分類を確認。
 - マルチラン実行 … 成功率・pass@k・usabilityの集計とレポート/JSON出力を確認。
 - compare … ランキング・相対スコア・マトリクス・APIキー環境変数展開を確認。
+- モデル解決 … `model:auto` のサーバ検出・ラベル整形・Ollama動的解決・未起動時の親切エラーを確認。
 - ruff（E,F,W,B,SIM,C4,S）… 追加・変更ファイルは指摘ゼロ。`compileall` OK。
 
 ## 後方互換・移行メモ
 
 - `runs=1` では既存フィールドの値は不変。`results.json` には追加フィールド
   （`runs` `success_rate` `pass_at_1` `pass_at_k` `attempts` `usability_tier`、
-  `summary.usability` ほか）が**増えます**。
+  `summary.usability` `solved_any_rate` ほか）が**増えます**。
 - `report.md` のタスク別結果に **「判定（ティア）」列**が常時追加され、複数試行時はさらに
   **「信頼性」列**が増えます。Markdown表を機械パースしている場合は列数の変化に注意。
-
-## 配置方法
-
-`llm-bench-v2.tar.gz` を展開するか、`_OUTPUTS/llm-bench-v2/` の各ファイルをリポジトリへコピー。
-本体への反映やPR化はご指示ください（feature ブランチ運用に従います）。
+- サマリの `pass@k` 行は撤去し、`成功率(pass@1)` と `≥1成功` に変更（⑥）。

@@ -13,15 +13,19 @@
 
 1. [セットアップ](#1-セットアップ)
 2. [まず自己検証する (`validate`)](#2-まず自己検証する-validate)
-3. [モデルを設定する (`config.yaml`)](#3-モデルを設定する-configyaml)
-4. [ベンチマーク実行 (`run`)](#4-ベンチマーク実行-run)
-5. [出力の全体像](#5-出力の全体像)
-6. [実行ログの読み方](#6-実行ログの読み方)
-7. [レポート (`report.md`) の読み方](#7-レポート-reportmd-の読み方)
-8. [生成物 (`artifacts/`) を使ったデバッグ](#8-生成物-artifacts-を使ったデバッグ)
-9. [集計データ (`results.json`) の活用](#9-集計データ-resultsjson-の活用)
-10. [典型的なワークフロー](#10-典型的なワークフロー)
-11. [トラブルシューティング](#11-トラブルシューティング)
+3. [モデルを設定する (`config.yaml` / `model: auto`)](#3-モデルを設定する-configyaml--model-auto)
+4. [モデルを選ぶ (`models` / Ollama動的選択)](#4-モデルを選ぶ-models--ollama動的選択)
+5. [ベンチマーク実行 (`run`)](#5-ベンチマーク実行-run)
+6. [信頼性を測る (`--runs` / pass@k)](#6-信頼性を測る---runs--passk)
+7. [usability判定の読み方](#7-usability判定の読み方)
+8. [モデルを横断比較する (`compare`)](#8-モデルを横断比較する-compare)
+9. [出力の全体像](#9-出力の全体像)
+10. [実行ログの読み方](#10-実行ログの読み方)
+11. [レポート (`report.md`) の読み方](#11-レポート-reportmd-の読み方)
+12. [生成物 (`artifacts/`) を使ったデバッグ](#12-生成物-artifacts-を使ったデバッグ)
+13. [集計データ (`results.json`) の活用](#13-集計データ-resultsjson-の活用)
+14. [典型的なワークフロー](#14-典型的なワークフロー)
+15. [トラブルシューティング](#15-トラブルシューティング)
 
 ---
 
@@ -37,7 +41,7 @@ pip install -e .
 導入確認：
 
 ```bash
-llmbench list-tasks      # 同梱タスク15個が一覧表示されればOK
+llmbench list-tasks      # 同梱タスク20個が一覧表示されればOK
 ```
 
 ---
@@ -63,16 +67,16 @@ llmbench validate --tasks t016        # 追加した特定タスクだけ検証
 
 ---
 
-## 3. モデルを設定する (`config.yaml`)
+## 3. モデルを設定する (`config.yaml` / `model: auto`)
 
-接続は2系統。`config.yaml` の `base_url` / `model` を自分の環境に合わせて編集します。
+`config.yaml` の `base_url` を自分の環境に合わせるだけ。**`model` は `auto` 推奨**です。
 
 ```yaml
 models:
   local-openai:                         # llama.cpp / LM Studio / vLLM など
     type: openai
     base_url: "http://localhost:8085/v1"
-    model: "Qwopus3.6-27B-Coder-MTP"    # サーバ側のモデル名に一致させる
+    model: "auto"                       # サーバのロード中モデルを自動採用 (config編集不要)
     api_key: "sk-local"                 # ローカルはダミーで可
     temperature: 0.2
     max_tokens: 4096
@@ -80,50 +84,144 @@ models:
     type: ollama
     base_url: "http://localhost:11434"
     model: "qwen2.5-coder:32b"
+  ref-gpt:                              # compareの参照アンカー (API)
+    type: openai
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o"
+    api_key: "${OPENAI_API_KEY}"        # ${VAR} は環境変数から展開
 
 run:
   issue_lang: en                        # ja に切替で language tax 検証
   test_timeout: 120
+  runs: 1                               # 既定の試行回数 (>1 で pass@k)
+  sample_temp: 0.8                      # 複数試行時の温度
 
-quality:
-  llm_review:
-    enabled: false                      # レビュー用モデル稼働時に true
-    reviewer_model: local-openai
+usability:                              # ティア分類のしきい値
+  autonomous: {min_success: 0.9, min_quality: 80}
+  assisted:   {min_success: 0.6, min_quality: 0}
 ```
 
-> 💡 **モデル比較のコツ**: 比較したいモデルごとに `models:` のエントリを増やし、
-> `--model` を切り替えるだけ。`base_url` / `model` 以外の条件を揃えれば公平に比べられます。
+> 💡 **`model: auto` が効くと config を二度と触らなくて済みます。** llama.cpp等でggufを
+> 差し替える → そのまま `llmbench run` するだけ。llmbench が `/v1/models` から実モデル名を
+> 取得し、レポート/結果ファイルもその実名でラベルします（`.gguf` は自動除去）。
+> APIキーは `${OPENAI_API_KEY}` のように環境変数で渡せます（configに直書き不要）。
 
 ---
 
-## 4. ベンチマーク実行 (`run`)
+## 4. モデルを選ぶ (`models` / Ollama動的選択)
+
+どんなモデルが使えるかは `models` で一覧できます（config定義 + Ollama稼働モデル）。
 
 ```bash
-# 全タスクを既定言語(en)で
+llmbench models
+#   === config.yaml 定義モデル ===
+#     local-openai (type=openai, model=auto)
+#     local-ollama (type=ollama, model=qwen2.5-coder:32b)
+#   === Ollama 稼働モデル (http://localhost:11434) ===
+#     qwen2.5-coder:7b
+#     llama3:8b
+#     → config未定義でも `--model <名前>` でそのまま実行できます
+```
+
+- **Ollamaはconfig未定義でも直接指定可**: `llmbench run --model qwen2.5-coder:7b`。
+  起動中のOllamaの `/api/tags` から自動解決します（接続先は `--ollama-host`）。
+- Ollama未起動でも `models` はエラーにならず案内を出します。
+
+---
+
+## 5. ベンチマーク実行 (`run`)
+
+```bash
+# 全20タスクを既定言語(en)で1回
 llmbench run --model local-openai
+
+# 各タスク5回 → 成功率・pass@k・usability判定
+llmbench run --model local-openai --runs 5
 
 # 特定タスクだけ・日本語issueで (language tax 計測)
 llmbench run --model local-openai --tasks t001,t011 --lang ja
 
-# 出力先を変える
-llmbench run --model local-ollama --output results/ollama_run1
+# Ollamaの実モデル名を直接 / 出力先を変える
+llmbench run --model qwen2.5-coder:7b --runs 5 --output results/qwen7b
 ```
 
 | オプション | 説明 |
 |---|---|
-| `--model` | **必須**。`config.yaml` の `models:` のキー名 |
+| `--model` | **必須**。config の `models:` キー、または Ollama稼働モデル名 |
+| `--runs` | 各タスクの試行回数。`>1` で成功率・pass@k を計測（既定: `run.runs` または1） |
+| `--sample-temp` | 複数試行時のサンプリング温度（既定: `run.sample_temp` または0.8） |
+| `--label` | 結果ラベルを明示指定（既定: `model:auto`時はサーバ検出名） |
 | `--tasks` | カンマ区切りのタスクID（例: `t001,t003`）。省略で全タスク |
 | `--lang` | `en` / `ja`。configの `issue_lang` を上書き |
+| `--ollama-host` | Ollama接続先（未定義モデルの自動解決に使用） |
 | `--output` | 結果出力先ディレクトリ（既定: `results`） |
-| `--tasks-dir` | タスク定義の場所（既定: `tasks`） |
-| `--config` | 設定ファイル（既定: `config.yaml`） |
+| `--tasks-dir` / `--config` | タスク定義 / 設定ファイルの場所 |
 
-実行が終わると、標準出力に Resolved率・品質平均・Combined平均と、
+実行が終わると、標準出力に Resolved率・（多試行なら）平均成功率・品質平均・Combined平均と、
 保存された結果ファイルのパスが表示されます。
 
 ---
 
-## 5. 出力の全体像
+## 6. 信頼性を測る (`--runs` / pass@k)
+
+1回成功しただけでは「使える」とは言えません。`--runs N` で各タスクをN回試行し、
+**成功率(pass@1)** を主指標に信頼性を測ります。
+
+```bash
+llmbench run --model local-openai --runs 5
+```
+
+レポート/結果に出る信頼性指標：
+
+| 指標 | 意味 |
+|---|---|
+| **成功率 (pass@1)** | 1回試行で通る期待値。**信頼性の主指標** |
+| ≥1成功 | N回中1回でも通ったか（再試行込みの到達可能性） |
+| flaky | `2/5 passed` のように成功・失敗が割れる状態。不安定の証拠 |
+
+`combined` は成功率でスケールされるため、フレるタスクは自動的に減点されます
+（例: 60%成功・品質90 → 0.6×95 = 57点）。同じモデルでも `--runs` を増やすと、
+1サンプルでは見えなかった**フレが顕在化**します。
+
+---
+
+## 7. usability判定の読み方
+
+各タスクは success_rate と quality から3ティアに分類されます（しきい値は `config.yaml`）。
+
+| ティア | 既定条件 | 運用判断 |
+|---|---|---|
+| 🟢 自律 | success ≥ 0.9 かつ quality ≥ 80 | レビューほぼ不要で任せられる |
+| 🟡 補助 | success ≥ 0.6 | レビュー前提なら使える |
+| 🔴 不可 | 上記未満 | この種のタスクには任せられない |
+
+レポートの「usability判定」セクションには、ティア集計・**難易度×ティアの割合**・
+保守的な総合推奨（🔴不可が1つでもあれば「自律」と言い切らない）が出ます。
+「品質軸で🟡補助」（毎回成功するが quality<80）と「信頼性軸で🟡補助/🔴不可」（フレる）の
+両方を見分けられます。
+
+---
+
+## 8. モデルを横断比較する (`compare`)
+
+複数の `results.json` を1枚のレポートにまとめます。
+
+```bash
+# 自分のモデルと参照モデル(API)を同条件で
+llmbench run --model local-openai --runs 5 --output results
+OPENAI_API_KEY=sk-... llmbench run --model ref-gpt --runs 5 --output results
+
+# 横断比較レポートを生成
+llmbench compare results/*_results.json --output results
+```
+
+出力 `comparison_<stamp>.md` には、Combined降順のランキング（最良比の**相対スコア**）、
+usabilityティア比較、**タスク別Combinedマトリクス**（行内ベストを太字）が並びます。
+参照モデルを併置すると、ローカルモデルのスコアが「どの位置か」を解釈できます。
+
+---
+
+## 9. 出力の全体像
 
 1回の `run` で、出力先（既定 `results/`）に **3種類** が生成されます。
 ファイル名の `<stamp>` は実行時刻、`<model>` はモデル名です。
@@ -150,12 +248,12 @@ results/
 
 ---
 
-## 6. 実行ログの読み方
+## 10. 実行ログの読み方
 
 改善後は、タスクごとに「**何が生成され、どう判定されたか**」がその場で分かります。
 
 ```
-[3/15] t003 (easy) リスト要素の重複除去
+[3/20] t003 (easy) リスト要素の重複除去
     生成OK  files=[dedup.py]  214tok @ 126.9tok/s
       └ dedup.py (12 LOC): def dedup(items): ⏎ seen = set()
     ✅ RESOLVED  quality=100 combined=100  (1.5s)
@@ -173,7 +271,7 @@ results/
 失敗例：
 
 ```
-[11/15] t011 (hard) ...
+[11/20] t011 (hard) ...
     生成OK  files=[parser.py]  402tok @ 98.0tok/s
       └ parser.py (35 LOC): def parse(s): ⏎ tokens = []
     ❌ FAILED (tests_failed)  quality=0 combined=0  (3.8s)
@@ -184,59 +282,63 @@ results/
 
 ---
 
-## 7. レポート (`report.md`) の読み方
+## 11. レポート (`report.md`) の読み方
 
-改善後のレポートは **サマリ → タスク別結果 → 難易度別 → タスク別詳細** の構成です。
+レポートは **サマリ → usability判定 → タスク別結果 → 難易度別 → タスク別詳細** の構成です。
 
 ### サマリ
 
-```markdown
-# llmbench レポート: local-openai
+`--runs N` を付けると、成功率(pass@1)・≥1成功・usability判定が加わります。
 
-Issue言語: `en` / タスク数: 15
+```markdown
+# llmbench レポート: Qwopus3.6-27B-Coder-MTP-Q6_K
+Issue言語: `en` / タスク数: 20 / 試行: ×5
 
 ## サマリ
-
 | 指標 | 値 |
 |---|---|
-| ✅ Resolved率 | **100.0%** (15/15) |
-| 🏅 品質平均 (resolvedのみ) | **88.6 / 100** |
-| 🎯 Combined平均 | **94.3 / 100** |
+| ✅ Resolved率 | **95.0%** (19/20) |
+| 🎲 平均成功率 (pass@1, ×5) | **93.0%** |
+| 🔁 ≥1成功できたタスク | **95.0%** (19/20) |
+| 🏅 品質平均 (resolvedのみ) | **89.8 / 100** |
+| 🎯 Combined平均 | **88.2 / 100** |
 
-> 📂 生成物 ... は `<stamp>_<model>_artifacts/<task_id>/` に保存。
+## 🧭 usability判定
+- 🟢 自律 17/20 / 🟡 補助 2/20 / 🔴 不可 1/20
+> 総合推奨: おおむね自律。ただし🔴不可 1/20 (5%) は要注意
 ```
 
 ### タスク別結果（一覧表）
 
-`Resolved` 列はアイコン（✅/❌）になり、**生成ファイル**列と**備考**列（失敗理由・パースエラー）が追加。
-一覧で「どのタスクがどのファイルを生成し、なぜ落ちたか」まで掴めます。
+`判定` 列に usability ティア（🟢/🟡/🔴）が出ます。多試行時はさらに **信頼性**列
+（`4/5 (成功率80%)`）が加わり、`備考` に `flaky 3/5 passed` 等が入ります。
 
-| | Task | 難易度 | 生成ファイル | Quality | Combined | 生成時間 | tok/s | 備考 |
+| | Task | 難易度 | 判定 | 信頼性 | 生成ファイル | Quality | Combined | 備考 |
 |---|---|---|---|---|---|---|---|---|
-| ✅ | t003 | easy | `dedup.py` | 100 | 100 | 1.5s | 126.9 | — |
-| ❌ | t011 | hard | `parser.py` | 0 | 0 | 3.8s | 98.0 | tests_failed |
+| ✅ | t007 | medium | 🟡 補助 | 4/5 (成功率80%) | `word_freq.py` | 100 | 80 | flaky 4/5 passed |
+| ❌ | t020 | hard | 🔴 不可 | 0/5 (成功率0%) | `calc.py` | 0 | 0 | tests failed |
 
 ### タスク別詳細
 
-タスクごとに、難易度・判定・生成ファイル・生成物パス・**品質内訳（整形済み）**を表示。
-旧版は生のdictでしたが、改善後は人が読める形式になりました：
+タスクごとに、難易度・判定・**信頼性(pass@1)**・usabilityティア・生成物パス・品質内訳を表示。
 
 ```markdown
-### ✅ t010 — CSV行のパース
-
-- 難易度: medium / 判定: RESOLVED
-- 生成ファイル: csv_line.py
-- 生成物: `20260614_004946_local-openai_artifacts/t010/`
-- ruff: ✅ 指摘なし (49 LOC)
-- complexity: MI=67 / 最悪CCランク=B  score=62  (最複雑: csv_line.py:parse_csv_line (CC=8))
+### ✅ t007 — word_frequencies treats Word/word as different
+- 難易度: medium / 判定: RESOLVED (flaky 4/5 passed) / usability: 🟡 補助
+- 信頼性: 成功 4/5 （成功率 80% = pass@1） / 5回中≥1成功: ✓
+- 生成ファイル: word_freq.py
+- 生成物: `<stamp>_<model>_artifacts/t007/`
+- 品質内訳（下記は代表1試行の値。上のQuality は5試行の平均）:
+  - ruff: ✅ 指摘なし (17 LOC)
+  - complexity: MI=100 / 最大複雑度ランク=A → score=100
 ```
 
-- **ruff**: 指摘件数・密度・違反ルール・スコア（指摘ゼロなら `✅ 指摘なし`）
-- **complexity**: Maintainability Index・最悪CCランク・最も複雑な関数
+> ⚠️ **多試行時の注意**: 品質内訳（ruff/complexity）は**代表1試行**の値、Quality数値は
+> **N試行の平均**です。一致しないことがあるのは仕様（注記つきで表示されます）。
 
 ---
 
-## 8. 生成物 (`artifacts/`) を使ったデバッグ
+## 12. 生成物 (`artifacts/`) を使ったデバッグ
 
 改善の主役。**「なぜ落ちたか」「なぜ品質が低いか」をコードレベルで追える**ようになりました。
 
@@ -261,44 +363,64 @@ Issue言語: `en` / タスク数: 15
 
 ---
 
-## 9. 集計データ (`results.json`) の活用
+## 13. 集計データ (`results.json`) の活用
 
 スコアと集計に特化した軽量JSON（生出力やテストログなどの大きいフィールドは
 artifactsに分離されているため軽い）。モデル間比較やCIに向きます。
 
 ```jsonc
 {
-  "model": "local-openai",
+  "model": "Qwopus3.6-27B-Coder-MTP-Q6_K",   // model:auto検出時は実モデル名
   "issue_lang": "en",
-  "artifacts_dir": "20260614_004946_local-openai_artifacts",
+  "artifacts_dir": "<stamp>_<model>_artifacts",
   "summary": {
-    "resolved_rate": 1.0,
-    "avg_quality_resolved": 88.6,
-    "avg_combined": 94.3,
-    "n_tasks": 15
+    "resolved_rate": 0.95,
+    "avg_quality_resolved": 89.8,
+    "avg_combined": 88.2,
+    "n_tasks": 20,
+    "runs": 5,
+    "usability": { "autonomous": 17, "assisted": 2, "unusable": 1 },
+    "avg_success_rate": 0.93,   // = 平均pass@1 (多試行時のみ)
+    "solved_any_rate": 0.95,    // N回中≥1成功 (多試行時のみ)
+    "avg_pass_at_k": 0.95       // k=runs時は退化する点に注意
   },
-  "results": [ /* タスクごとのスコア・品質内訳 */ ]
+  "results": [
+    {
+      "task_id": "t007", "difficulty": "medium", "title": "...",
+      "resolved": true, "quality_score": 100.0, "combined": 80.0,
+      "runs": 5, "n_pass": 4, "success_rate": 0.8,
+      "pass_at_1": 0.8, "pass_at_k": 1.0,
+      "usability_tier": "assisted",
+      "parse_ok": true, "fail_reason": "flaky 4/5 passed",
+      "attempts": [ /* 各試行の {resolved, quality, combined} */ ],
+      "quality_components": { /* ruff / complexity */ }
+    }
+  ]
 }
 ```
 
-### モデル比較の例
+> 注: `raw_output` / `parsed_files` / `test_output` は results.json には含まれず、
+> `artifacts/<task_id>/` 側に保存されます（JSONを軽量に保つため）。
+
+### `compare` でまとめて比較（推奨）
 
 ```bash
-# 複数モデルを同条件で実行
-llmbench run --model local-openai --output results
-llmbench run --model local-ollama --output results
+llmbench run --model local-openai --runs 5 --output results
+llmbench run --model ref-gpt      --runs 5 --output results
+llmbench compare results/*_results.json --output results   # ランキング＋マトリクス
+```
 
-# combined平均をまとめて比較
-for f in results/*_results.json; do
-  python3 -c "import json,sys; d=json.load(open(sys.argv[1])); \
-    print(f\"{d['model']:20s} resolved={d['summary']['resolved_rate']*100:5.1f}%  \
-combined={d['summary']['avg_combined']:.1f}\")" "$f"
-done
+### jq で手早く確認
+
+```bash
+# 失敗・フレたタスクを抽出
+jq -r '.results[] | select(.success_rate < 1) | "\(.task_id)\t\(.success_rate)\t\(.fail_reason)"' \
+  results/<stamp>_<model>_results.json
 ```
 
 ---
 
-## 10. 典型的なワークフロー
+## 14. 典型的なワークフロー
 
 ### A. 新しいモデルを初めて評価する
 
@@ -328,7 +450,7 @@ llmbench run --model <model> --tasks t011,t013
 
 ---
 
-## 11. トラブルシューティング
+## 15. トラブルシューティング
 
 | 症状 | 原因・対処 |
 |---|---|

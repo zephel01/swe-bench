@@ -22,11 +22,14 @@
 
 - 🎯 **機能的正確性** — SWE-Bench風。バグレポート + ソースをLLMに渡し、patch適用 → 隠しテスト(pytest)で resolved 判定
 - 🧹 **コード品質レイヤー** — Ruff (lint密度) / radon (保守性指数・循環的複雑度) / LLMレビュー採点 / SonarQube を重み付き合成
-- ⚖️ **複合スコア** — 動かないコードは0点。動くコードを品質で差別化
-- 🔌 **接続2系統** — OpenAI互換API (llama.cpp / LM Studio / vLLM) と Ollama 両対応。configのbase_url切替だけでモデル比較
+- 🎲 **信頼性 (pass@k)** — `--runs N` で各タスクをN回試行し、成功率(pass@1)・pass@k・フレ(flaky)を計測。「1回成功＝使える」ではなく**安定して使えるか**を測る
+- 🧭 **usability判定** — 信頼性×品質から各タスクを **🟢自律 / 🟡補助 / 🔴不可** に分類し、「実際どれくらい任せられるか」を提示
+- ⚖️ **複合スコア** — 動かないコードは0点。動くコードを成功率と品質で差別化
+- 🔌 **接続自在** — OpenAI互換API (llama.cpp / LM Studio / vLLM) と Ollama 両対応。**`model: auto`** でサーバのロード中モデルを自動採用（config編集不要）、Ollamaは**インストール済みモデルを動的に選択**
+- 🆚 **モデル横断比較** — `compare` で複数結果を1枚のランキング・マトリクスに。参照モデル(API)を併置して位置づけ
 - 🇯🇵 **日英issue同梱** — `--lang ja` で「language tax」(日本語指示による性能低下)を計測可能
 - ⚡ **速度計測** — タスク別レイテンシ / tok/s をレポートに自動記録
-- 📦 **同梱タスク15個** — easy / medium / hard 各5。外部依存なし(stdlib-only)で即実行
+- 📦 **同梱タスク20個** — easy 5 / medium 5 / hard 10。複数ファイル・曖昧仕様・状態バグなど実務的な難問込み。外部依存なし(stdlib-only)で即実行
 - 🛡️ **安全設計** — テストはLLMに非公開、patch書込先は既知ファイルに限定、元タスクは不変
 
 ## 🚀 クイックスタート
@@ -40,29 +43,61 @@ pip install -e .
 # 1️⃣ 自己検証 (LLM不要 — モックでパイプライン全体を確認)
 llmbench validate
 
-# 2️⃣ config.yaml の base_url / model を自分の環境に編集
+# 2️⃣ config.yaml の base_url を自分の環境に。model は "auto" でOK（サーバのモデルを自動採用）
 
-# 3️⃣ 実行
-llmbench run --model local-ollama
+# 3️⃣ 利用可能モデルを確認（config定義 + Ollama稼働モデル）
+llmbench models
+
+# 4️⃣ 実行
+llmbench run --model local-openai                 # 全20タスク・1回
+llmbench run --model local-openai --runs 5        # 各タスク5回 → 成功率・pass@k
+llmbench run --model qwen2.5-coder:7b --runs 5    # Ollamaの実モデル名を直接指定もOK
 llmbench run --model local-openai --tasks t001,t011 --lang ja
+
+# 5️⃣ 複数結果を横断比較
+llmbench compare results/*_results.json
 ```
 
-結果は `results/` に JSON + Markdown レポートで保存されます。
+サブコマンド: `list-tasks` / `models` / `run` / `compare` / `validate`
+
+結果は `results/` に以下の3点で保存されます。
+
+- `<stamp>_<model>_results.json` — スコア・集計 (機械可読、軽量)
+- `<stamp>_<model>_report.md` — 人が読むMarkdownレポート
+- `<stamp>_<model>_artifacts/<task_id>/` — **生成物そのもの**
+  - `llm_output.txt` … LLMの生出力 (パース失敗時の原因確認用)
+  - `generated/<path>` … 適用された生成コード (動作確認用)
+  - `test_output.txt` … pytest出力 (テスト失敗の原因確認用)
+
+実行中のログにも、タスクごとに生成ファイル・コード冒頭・パース/テスト結果が出力されるので、その場で「ちゃんと動いているか」を確認できます。
+
+> [!TIP]
+> 実行ログ・レポート・生成物の**読み解き方**やモデル比較の手順は [📘 利用ガイド (USAGE.md)](USAGE.md) を参照。
 
 <details>
-<summary>📄 レポート出力例</summary>
+<summary>📄 レポート出力例 (--runs 5)</summary>
 
 ```markdown
-# llmbench レポート: local-ollama
+# llmbench レポート: Qwopus3.6-27B-Coder-MTP-Q6_K
+Issue言語: `en` / タスク数: 20 / 試行: ×5
 
-- Resolved率: 73.3%
-- 品質平均 (resolvedのみ): 84.2/100
-- Combined平均: 67.5/100
+## サマリ
+| 指標 | 値 |
+|---|---|
+| ✅ Resolved率 | **95.0%** (19/20) |
+| 🎲 平均成功率 (pass@1, ×5) | **93.0%** |
+| 🔁 ≥1成功できたタスク | **95.0%** (19/20) |
+| 🏅 品質平均 (resolvedのみ) | **89.8 / 100** |
+| 🎯 Combined平均 | **88.2 / 100** |
 
-| Task | 難易度 | Resolved | Quality | Combined | 生成時間(s) | tok/s |
+## 🧭 usability判定
+- 🟢 自律 17/20 (85%) / 🟡 補助 2/20 (10%) / 🔴 不可 1/20 (5%)
+> 総合推奨: おおむね自律。ただし🔴不可 1/20 (5%) は要注意
+
+| | Task | 判定 | 信頼性 | Quality | Combined | tok/s |
 |---|---|---|---|---|---|---|
-| t001 | easy   | O | 95 | 98 | 4.2  | 62.1 |
-| t011 | hard   | X | 0  | 0  | 18.9 | 58.3 |
+| ✅ | t007 | 🟡 補助 | 4/5 (成功率80%) | 100 | 80 | 111.9 |
+| ❌ | t020 | 🔴 不可 | 0/5 (成功率0%)  | 0   | 0  | 122.2 |
 ```
 
 </details>
@@ -70,14 +105,29 @@ llmbench run --model local-openai --tasks t001,t011 --lang ja
 ## 📊 スコアリング
 
 ```
-combined = resolved × (0.5 + 0.5 × quality / 100) × 100
+combined = success_rate × (0.5 + 0.5 × quality / 100) × 100
 ```
 
-| resolved | quality | combined | 意味 |
+`success_rate` は試行の成功率（`--runs 1` なら resolved の 0/1、複数試行なら 0.0〜1.0）。
+**信頼性がそのままスコアに反映**される（例: 60%成功・品質90 → 0.6×95 = 57点）。
+
+| success_rate | quality | combined | 意味 |
 |---|---|---|---|
-| ❌ | — | **0** | 動かないコードは品質に関わらず0点 |
-| ✅ | 0 | **50** | 動くが品質最低 |
-| ✅ | 100 | **100** | 動いて品質も完璧 |
+| 0 (不可) | — | **0** | 動かないコードは品質に関わらず0点 |
+| 1.0 | 0 | **50** | 毎回動くが品質最低 |
+| 1.0 | 100 | **100** | 毎回動いて品質も完璧 |
+| 0.6 (flaky) | 90 | **57** | たまに失敗。信頼性で減点 |
+
+### 信頼性 (pass@k) と usability判定
+
+`--runs N` で各タスクをN回試行し、**成功率(pass@1)** を主指標に、pass@k・フレ(flaky)を計測。
+さらに success_rate と quality からタスクを3ティアに分類する (しきい値は `config.yaml` の `usability:`):
+
+| ティア | 既定条件 | 意味 |
+|---|---|---|
+| 🟢 自律 | success ≥ 0.9 かつ quality ≥ 80 | レビューほぼ不要で任せられる |
+| 🟡 補助 | success ≥ 0.6 | レビュー前提なら使える |
+| 🔴 不可 | 上記未満 | この種のタスクには任せられない |
 
 品質スコアの内訳 (重みは `config.yaml` で自由に変更):
 
@@ -97,36 +147,56 @@ models:
   local-openai:            # llama.cpp / LM Studio / vLLM
     type: openai
     base_url: "http://localhost:8080/v1"
-    model: "qwen2.5-coder-32b-instruct"
+    model: "auto"          # auto = /v1/models のロード中モデルを自動採用 (config編集不要)
   local-ollama:
     type: ollama
     base_url: "http://localhost:11434"
     model: "qwen2.5-coder:32b"
+  ref-gpt:                 # compareのアンカー用 (API)
+    type: openai
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o"
+    api_key: "${OPENAI_API_KEY}"   # ${VAR} は環境変数から展開
 
 run:
   issue_lang: en           # ja に切替で language tax 検証
   test_timeout: 120
+  runs: 1                  # 各タスクの試行回数 (>1 で pass@k・成功率)
+  sample_temp: 0.8         # 複数試行時のサンプリング温度
+  # ollama_host: "http://localhost:11434"   # Ollama接続先 (未定義モデルの自動解決)
 
 quality:
   llm_review:
     enabled: false         # レビュー用モデル稼働時に true
     reviewer_model: local-openai
+
+usability:                 # success_rate × quality でティア分類
+  autonomous: {min_success: 0.9, min_quality: 80}
+  assisted:   {min_success: 0.6, min_quality: 0}
 ```
+
+> [!TIP]
+> **モデル名を毎回書き換える必要はありません。** `model: "auto"` にしておけば、llama.cpp等で
+> ggufを差し替えるだけで、llmbench が `/v1/models` から実モデル名を取得し、レポート/ファイル名も
+> その実名でラベルします。Ollamaは `--model <インストール済み名>` を直接指定できます
+> (`llmbench models` で一覧)。固定したい時は `--label <名前>`。
 
 ## 📁 プロジェクト構成
 
 ```
 swe-bench/
 ├── llmbench/
-│   ├── clients/        # 🔌 LLM接続 (openai_compat / ollama / mock)
+│   ├── clients/        # 🔌 LLM接続 (openai_compat / ollama / mock)。model:auto・Ollama一覧
 │   ├── patch.py        # 📝 LLM出力パース (FILE:マーカー + コードブロック)
 │   ├── sandbox.py      # 📦 一時コピー + pytest隔離実行
 │   ├── functional.py   # ✅ resolved判定
 │   ├── quality/        # 🧹 ruff / complexity / llm_review / sonar
-│   ├── scoring.py      # ⚖️ 複合スコア
-│   ├── runner.py       # 🎛️ オーケストレータ
+│   ├── scoring.py      # ⚖️ 複合スコア + pass@k 推定量
+│   ├── usability.py    # 🧭 自律/補助/不可 ティア分類
+│   ├── runner.py       # 🎛️ オーケストレータ (多試行集計・モデル解決)
+│   ├── compare.py      # 🆚 複数結果の横断比較レポート
 │   └── report.py       # 📊 Markdownレポート
-├── tasks/              # 🧩 同梱タスク15個 (easy/medium/hard × 5)
+├── tasks/              # 🧩 同梱タスク20個 (easy 5 / medium 5 / hard 10)
 └── config.yaml
 ```
 
@@ -135,8 +205,6 @@ swe-bench/
 > ローカルLLMはunified diffの行番号精度が低いため、この方式の方がパース成功率が高い。
 
 ## 🧩 タスクの追加
-
-> 📋 同梱15タスクの詳細仕様 (調査対象・採点基準) は **[TASKS.md](TASKS.md)** を参照。
 
 ```
 tasks/tXXX_name/
@@ -150,20 +218,23 @@ tasks/tXXX_name/
 1. 上記レイアウトでディレクトリを作成
 2. `tasks/tasks.jsonl` に1行追加:
    ```json
-   {"task_id": "t016", "dir": "t016_name", "difficulty": "medium", "title": "..."}
+   {"task_id": "t021", "dir": "t021_name", "difficulty": "medium", "title": "..."}
    ```
-3. 検証: `llmbench validate --tasks t016` (gold がpass / broken がfail すればOK)
+3. 検証: `llmbench validate --tasks t021` (gold がpass / broken がfail すればOK)
 
 ## 🗺️ ロードマップ
 
 - [x] 機能 + 品質の複合評価パイプライン
 - [x] OpenAI互換 / Ollama 両対応
 - [x] 日英issueによる language tax 計測
+- [x] 🎲 信頼性 (pass@k / 成功率) 計測
+- [x] 🧭 usability ティア判定
+- [x] 🆚 複数モデル横断比較レポート (`compare`)
+- [x] 🔎 `model: auto` / Ollama動的モデル選択
 - [ ] 🐳 Docker隔離実行
 - [ ] 📥 SWE-bench Lite 公式タスクの取込
 - [ ] 🔄 GitHub repoからのタスク自動抽出
 - [ ] 📈 nvidia-smiによるVRAM自動計測
-- [ ] 🆚 複数モデル一括比較レポート
 
 ## 🤝 Contributing
 

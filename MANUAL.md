@@ -1,7 +1,8 @@
-# 🛠️ llmbench 運用マニュアル — 新規追加機能（artifacts / レポート / ログ）
+# 🛠️ llmbench 運用マニュアル（artifacts / 信頼性 / usability / 比較 / モデル解決）
 
-本書は、今回のソース変更で追加された **生成物（artifacts）保存・レポート刷新・実行ログ強化** を
-「運用・保守・他システム連携」の観点からまとめた**運用＆リファレンスマニュアル**です。
+本書は、artifacts保存・レポート刷新に加え、その後追加された **信頼性(pass@k)・usability判定・
+モデル横断比較・モデル解決(model:auto/Ollama動的)** までを、「運用・保守・他システム連携」の
+観点でまとめた**運用＆リファレンスマニュアル**です。
 
 ドキュメントの役割分担：
 
@@ -9,10 +10,11 @@
 |---|---|---|
 | [README.md](README.md) | はじめての人 | 概要・特徴・スコア定義・タスク追加 |
 | [USAGE.md](USAGE.md) | 利用者 | 実行手順と結果の**読み解き方** |
+| [CHANGES.md](CHANGES.md) | 全員 | 追加機能の要約と変更履歴 |
 | **本書（運用マニュアル）** | 運用・保守・連携担当 | 出力ファイルの**仕様**・内部実装・運用上の注意・移行・自動化 |
 
-> 対象バージョン: 生成物保存対応版（`results.json` に `artifacts_dir` を含む）。
-> 変更ファイルは `runner.py` / `report.py` / `config.yaml` の3点です。
+> 対象バージョン: 全20タスク・多試行(pass@k)・usability・compare・`model:auto` 対応版。
+> `results.json` に `summary.usability` / `success_rate` 等を含む。
 
 ---
 
@@ -26,6 +28,7 @@
 6. [プログラムからの結果アクセス](#6-プログラムからの結果アクセス)
 7. [移行メモ（旧形式との差分）](#7-移行メモ旧形式との差分)
 8. [変更ファイル早見表](#8-変更ファイル早見表)
+9. [追加サブシステム（信頼性・usability・比較・モデル解決）](#9-追加サブシステム信頼性usability比較モデル解決)
 
 ---
 
@@ -41,7 +44,18 @@
 | ③ | **実行ログの強化** | 実行中にその場で「動いているか」を把握 | `runner.py`: `_log_task()` / `_snippet()` |
 
 副次的に、`results.json` は集計・スコア中心の**軽量JSON**に保たれるよう、
-大きい生成物フィールドを別ディレクトリ（artifacts）へ分離しています（②③と同コミット）。
+大きい生成物フィールドを別ディレクトリ（artifacts）へ分離しています。
+
+その後さらに、「**実際どれくらい使えるか**」を測るための機能群を追加しました
+（詳細は **9章**、要約は `CHANGES.md`）:
+
+| # | 機能 | 目的 |
+|---|---|---|
+| ④ | **信頼性 (pass@k / `--runs`)** | 1回成功ではなく、安定して成功するかを成功率で測る |
+| ⑤ | **usabilityティア** | スコアを🟢自律/🟡補助/🔴不可の運用判断に翻訳 |
+| ⑥ | **モデル横断比較 (`compare`)** | 参照モデルと並べて位置づけ |
+| ⑦ | **モデル解決 (`model:auto` / Ollama動的)** | config編集なしでモデルを差し替え |
+| ⑧ | **難タスク t016–t020** | 失敗が出る実務的タスクで識別力を確保（全20タスク） |
 
 ---
 
@@ -67,7 +81,7 @@ results/
 
 | キー | 型 | 説明 |
 |---|---|---|
-| `model` | str | モデル名（`--model` のキー） |
+| `model` | str | モデルラベル。`model:auto`時はサーバ検出名、`--label`で上書き可 |
 | `issue_lang` | str | `en` / `ja` |
 | `artifacts_dir` | str | 対応するartifactsディレクトリ名（相対） |
 | `summary` | obj | 下表 |
@@ -77,10 +91,15 @@ results/
 
 | キー | 説明 |
 |---|---|
-| `resolved_rate` | resolved 割合（0.0–1.0、小数3桁） |
+| `resolved_rate` | resolved 割合（0.0–1.0、小数3桁）。多試行では success_rate≥0.5 を resolved とみなす |
 | `avg_quality_resolved` | **resolvedタスクのみ**の品質平均（小数1桁） |
 | `avg_combined` | 全タスクのcombined平均（小数1桁） |
 | `n_tasks` | タスク数 |
+| `runs` | 1タスクあたりの試行回数 |
+| `usability` | `{autonomous, assisted, unusable}` のタスク数 |
+| `avg_success_rate` | 平均成功率（=平均pass@1）。**多試行時のみ** |
+| `solved_any_rate` | N回中≥1成功したタスクの割合。**多試行時のみ** |
+| `avg_pass_at_k` | 平均pass@k。**多試行時のみ**（k=runsで退化する点に注意） |
 
 `results[]`（**軽量化済み** — 大きいフィールドは除外）：
 
@@ -88,17 +107,18 @@ results/
 |---|---|---|
 | `task_id` | str | 例: `t001` |
 | `difficulty` | str | `easy` / `medium` / `hard` |
-| `title` | str | タスクタイトル（★新規） |
-| `resolved` | bool | テスト合格判定 |
-| `quality_score` | float | 0–100（重み付き合成） |
-| `combined` | float | 0–100 |
-| `latency_sec` | float | 生成レイテンシ |
-| `tokens_per_sec` | float\|null | 生成速度 |
-| `completion_tokens` | int\|null | 生成トークン数 |
-| `fail_reason` | str | 失敗理由（空文字＝成功） |
-| `parse_ok` | bool | LLM出力のパース成否（★新規） |
-| `parse_error` | str | パース失敗理由（★新規） |
-| `quality_components` | obj | ruff / complexity / llm_review / sonarqube の内訳 |
+| `title` | str | タスクタイトル |
+| `resolved` | bool | テスト合格判定（多試行では success_rate≥0.5） |
+| `quality_score` | float | 0–100。多試行では**成功試行の平均** |
+| `combined` | float | 0–100。`success_rate × (floor + (1-floor)×quality/100) × 100` |
+| `latency_sec` / `tokens_per_sec` / `completion_tokens` | — | 速度メトリクス（多試行は平均） |
+| `fail_reason` | str | 失敗理由。部分成功は `flaky c/N passed` |
+| `parse_ok` / `parse_error` | bool/str | 代表試行のパース成否・理由 |
+| `runs` / `n_pass` | int | 試行回数 / 成功回数 |
+| `success_rate` / `pass_at_1` / `pass_at_k` | float | 成功率（=pass@1）/ pass@k |
+| `attempts` | array | 各試行の `{resolved, quality, combined, fail_reason}` |
+| `usability_tier` | str | `autonomous` / `assisted` / `unusable` |
+| `quality_components` | obj | 代表試行の ruff / complexity / … 内訳 |
 
 > ⚠️ **`results.json` に含まれないフィールド**（artifactsへ分離）:
 > `raw_output`（LLM生出力）・`parsed_files`（生成コード）・`test_output`（pytest出力）。
@@ -289,9 +309,53 @@ cat "results/$adir/t011/llm_output.txt"
 
 | ファイル | 変更概要 |
 |---|---|
-| `llmbench/runner.py` | `TaskResult` に生成物フィールド追加 / `ARTIFACT_FIELDS`・`_lean()` でJSON軽量化 / `_write_artifacts()` でartifacts保存 / `_log_task()`・`_snippet()` でログ強化 / `save_run()` が artifacts ディレクトリを生成 |
-| `llmbench/report.py` | サマリ表・タスク別詳細・✅❌アイコン・生成ファイル/備考列・ruff/complexity整形（`_fmt_*`）を追加 |
-| `config.yaml` | `local-openai` の `base_url`・`model` を更新（挙動への影響なし） |
+| `llmbench/runner.py` | artifacts保存 + **多試行集計**（`Attempt`/`_aggregate_attempts`/pass@k）・**モデル解決**（`resolve_model`/Ollama自動・`model:auto`ラベル）・`_log_task` |
+| `llmbench/scoring.py` | `combined_score` を success_rate スケールに一般化 + `pass_at_k`（不偏推定量） |
+| `llmbench/usability.py` | **新規**。ティア分類 `classify()` と集計 `aggregate()` |
+| `llmbench/compare.py` | **新規**。複数 results.json の横断比較レポート |
+| `llmbench/report.py` | usability判定セクション・信頼性列・pass@1主指標・保守的な総合推奨・品質内訳注記 |
+| `llmbench/clients/openai_compat.py` | `model:auto` のサーバ検出（`fetch_served_model`）・APIキー環境変数展開 |
+| `llmbench/clients/ollama.py` | `list_ollama_models()`（`/api/tags`） |
+| `llmbench/cli.py` | `models` / `compare` サブコマンド・`--runs`/`--sample-temp`/`--label`/`--ollama-host` |
+| `config.yaml` | `model:auto`・`run.runs`/`sample_temp`/`ollama_host`・`usability:`・`ref-gpt` |
+| `tasks/` | 難タスク t016–t020 追加（全20タスク） |
 
-> 検証状況: `llmbench validate` PASS、`run` による artifacts 生成・JSON軽量化（生成物フィールド除外）・
-> 集計値の再計算一致を確認済み。
+> 検証状況: `llmbench validate` PASS（gold 20/20・broken 20/20）、多試行集計・usability・compare・
+> モデル解決の各単体、ruff（追加/変更ファイル指摘ゼロ）、`compileall` を確認済み。
+
+---
+
+## 9. 追加サブシステム（信頼性・usability・比較・モデル解決）
+
+artifacts導入後に加わった主要機能の運用リファレンス。利用手順は `USAGE.md`、要約は `CHANGES.md`。
+
+### 9.1 信頼性 (pass@k)
+
+`--runs N`（または `run.runs`）で各タスクをN回サンプリング。`runner._aggregate_attempts()` が
+成功率(=pass@1)・pass@k・代表試行を集計する。`scoring.pass_at_k(n,c,k)` は Chen et al. 2021 の不偏推定量。
+**注意**: 本ハーネスは n=runs サンプルなので、`pass_at_k`（k=runs）は「N回中≥1成功」に退化する。
+運用上の主指標は **success_rate(pass@1)**、補助に **solved_any_rate** を見ること。
+
+### 9.2 usabilityティア
+
+`usability.classify(success_rate, quality, cfg)` が 🟢自律 / 🟡補助 / 🔴不可 を返す。しきい値は
+`config.yaml` の `usability:`。レポートは難易度×ティアの**割合**と、🔴不可を隠さない**保守的な総合推奨**を出す。
+
+### 9.3 モデル比較 `compare`
+
+`llmbench compare <results.json...>` → `comparison_<stamp>.md`。ランキング（最良比の相対スコア）・
+ティア比較・タスク別Combinedマトリクスを生成。参照アンカーとして API モデル（`ref-gpt`）を併走させる。
+
+### 9.4 モデル解決（config編集レス運用）
+
+- `model: auto` … `openai_compat.fetch_served_model()` が `/v1/models` からロード中モデルを取得。
+  ラベル（レポート/ファイル名）も実モデル名（`runner._label_from_model` で `.gguf` 除去）。
+- Ollama動的 … config未定義の `--model <名前>` は `runner.resolve_model()` が `/api/tags` から解決。
+- 接続先優先順: `--ollama-host` > config の ollama モデル `base_url` > `http://localhost:11434`。
+- `--label` で明示固定。APIキーは `${VAR}` を環境変数展開。
+
+### 9.5 運用上の注意
+
+- **多試行はディスク/時間が N 倍**。artifactsは代表1試行のみ保存するので肥大化は限定的だが、生出力は残る。
+- pass@k の解釈は 9.1 の通り。`avg_pass_at_k` を「汎化性能」と誤読しないこと。
+- レポート表の列数が増えている（判定・信頼性列）。機械パースは要追従（7章の移行メモ参照）。
