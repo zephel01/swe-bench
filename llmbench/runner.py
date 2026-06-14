@@ -245,7 +245,11 @@ class BenchmarkRunner:
                 f"[{i}/{len(tasks)}] {task.task_id} ({task.difficulty}) {task.title}"
                 + (f"  ×{runs}" if runs > 1 else "")
             )
-            tr = self._run_task(client, reviewer, task, lang, timeout, retries, runs)
+            # 性能制約タスクは個別 perf_timeout を優先 (無ければ config 既定)
+            task_timeout = task.perf_timeout or timeout
+            tr = self._run_task(
+                client, reviewer, task, lang, task_timeout, retries, runs
+            )
             run.results.append(tr)
             _log_task(progress, tr)
         return run

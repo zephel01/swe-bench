@@ -14,6 +14,7 @@ class Task:
     title: str
     dir: Path                # tasks/t001_xxx/
     files: list[str]         # buggy_code配下の相対パス一覧
+    perf_timeout: int | None = None  # 性能制約タスク用の個別タイムアウト(秒)
 
     def issue(self, lang: str = "en") -> str:
         name = "issue_ja.md" if lang == "ja" else "issue.md"
@@ -48,6 +49,7 @@ def load_tasks(tasks_root: Path, only: list[str] | None = None) -> list[Task]:
             title=rec["title"],
             dir=task_dir,
             files=files,
+            perf_timeout=rec.get("perf_timeout"),
         )
         if only and t.task_id not in only:
             continue
