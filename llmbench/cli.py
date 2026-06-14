@@ -118,6 +118,20 @@ def cmd_compare(args) -> int:
     return 0
 
 
+def cmd_certify(args) -> int:
+    """results.json を tier合格制で判定し「使えるライン」到達レベルを表示する."""
+    import json
+
+    from .certify import certify, render_certificate_md
+
+    for path in args.results:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        cert = certify(data.get("results", []))
+        print(render_certificate_md(cert, data.get("model", "")))
+        print()
+    return 0
+
+
 def cmd_validate(args) -> int:
     """gold/brokenモックで全パイプラインを自己検証する."""
     config = _load_config(args.config)
@@ -190,6 +204,10 @@ def main() -> None:
     p_val = sub.add_parser("validate", help="モックで自己検証")
     _common_args(p_val)
     p_val.set_defaults(fn=cmd_validate)
+
+    p_cert = sub.add_parser("certify", help="使えるライン判定 (tier合格制)")
+    p_cert.add_argument("results", nargs="+", help="判定する results.json")
+    p_cert.set_defaults(fn=cmd_certify)
 
     args = parser.parse_args()
     sys.exit(args.fn(args))
