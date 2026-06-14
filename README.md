@@ -24,12 +24,13 @@
 - 🧹 **コード品質レイヤー** — Ruff (lint密度) / radon (保守性指数・循環的複雑度) / LLMレビュー採点 / SonarQube を重み付き合成
 - 🎲 **信頼性 (pass@k)** — `--runs N` で各タスクをN回試行し、成功率(pass@1)・pass@k・フレ(flaky)を計測。「1回成功＝使える」ではなく**安定して使えるか**を測る
 - 🧭 **usability判定** — 信頼性×品質から各タスクを **🟢自律 / 🟡補助 / 🔴不可** に分類し、「実際どれくらい任せられるか」を提示
+- 🎓 **使えるライン認証 (`certify`)** — 難易度を tier(L1-L5) にマップし、tierごとの合格判定で「ここまでクリアできれば使える」を提示。**L4(expert)独立合格＝実務投入ライン**
 - ⚖️ **複合スコア** — 動かないコードは0点。動くコードを成功率と品質で差別化
 - 🔌 **接続自在** — OpenAI互換API (llama.cpp / LM Studio / vLLM) と Ollama 両対応。**`model: auto`** でサーバのロード中モデルを自動採用（config編集不要）、Ollamaは**インストール済みモデルを動的に選択**
 - 🆚 **モデル横断比較** — `compare` で複数結果を1枚のランキング・マトリクスに。参照モデル(API)を併置して位置づけ
 - 🇯🇵 **日英issue同梱** — `--lang ja` で「language tax」(日本語指示による性能低下)を計測可能
 - ⚡ **速度計測** — タスク別レイテンシ / tok/s をレポートに自動記録
-- 📦 **同梱タスク20個** — easy 5 / medium 5 / hard 10。複数ファイル・曖昧仕様・状態バグなど実務的な難問込み。外部依存なし(stdlib-only)で即実行
+- 📦 **同梱タスク40個** — L1 easy 5 / L2 medium 5 / L3 hard 10 / **L4 expert 12 / L5 frontier 8**。上位ローカルコーダーの天井効果を破る難問tier込み。frontierは複数ファイル・回帰罠・性能制約(perf_timeout)を含む。新tierのissueは**症状ベース**で原因診断を要求。外部依存なし(stdlib-only)で即実行
 - 🛡️ **安全設計** — テストはLLMに非公開、patch書込先は既知ファイルに限定、元タスクは不変
 
 ## 🚀 クイックスタート
@@ -49,16 +50,19 @@ llmbench validate
 llmbench models
 
 # 4️⃣ 実行
-llmbench run --model local-openai                 # 全20タスク・1回
+llmbench run --model local-openai                 # 全40タスク・1回
 llmbench run --model local-openai --runs 5        # 各タスク5回 → 成功率・pass@k
 llmbench run --model qwen2.5-coder:7b --runs 5    # Ollamaの実モデル名を直接指定もOK
-llmbench run --model local-openai --tasks t001,t011 --lang ja
+llmbench run --model local-openai --tasks t021,t033 --lang ja   # 新tierだけ実行も可
 
 # 5️⃣ 複数結果を横断比較
 llmbench compare results/*_results.json
+
+# 6️⃣ 使えるライン認証 (tier合格制)
+llmbench certify results/<stamp>_<model>_results.json
 ```
 
-サブコマンド: `list-tasks` / `models` / `run` / `compare` / `validate`
+サブコマンド: `list-tasks` / `models` / `run` / `compare` / `certify` / `validate`
 
 結果は `results/` に以下の3点で保存されます。
 
@@ -129,6 +133,23 @@ combined = success_rate × (0.5 + 0.5 × quality / 100) × 100
 | 🟡 補助 | success ≥ 0.6 | レビュー前提なら使える |
 | 🔴 不可 | 上記未満 | この種のタスクには任せられない |
 
+### 🎓 使えるライン認証 (`certify`)
+
+usability判定が**タスク単位**なのに対し、`certify` は**モデル全体**を判定する。
+難易度を tier(L1-L5) にマップし、tierごとの平均成功率/combinedが gate を満たすかを
+**独立に**評価して「到達レベル」を出す。`llmbench certify results/<...>_results.json`。
+
+| Gate | 条件 (tier平均) | 意味 |
+|---|---|---|
+| L1 easy | success ≥ 90% | おもちゃ級は確実 |
+| L2 medium | success ≥ 85% | 仕様準拠の単純作業可 |
+| L3 hard | success ≥ 75% かつ combined ≥ 60 | 実務の単純〜中級バグ可 |
+| **L4 expert** | **success ≥ 60% かつ combined ≥ 55** | **✅ 使えるライン (監督付き実務投入)** |
+| L5 frontier | success ≥ 40% | フロンティア級 |
+
+**使えるライン = L4 を独立に合格**(下位tierの取りこぼしに左右されない)。
+閾値は `llmbench/certify.py` の `DEFAULT_GATES` で調整可能。
+
 品質スコアの内訳 (重みは `config.yaml` で自由に変更):
 
 | レイヤー | 既定重み | 内容 |
@@ -193,10 +214,11 @@ swe-bench/
 │   ├── quality/        # 🧹 ruff / complexity / llm_review / sonar
 │   ├── scoring.py      # ⚖️ 複合スコア + pass@k 推定量
 │   ├── usability.py    # 🧭 自律/補助/不可 ティア分類
+│   ├── certify.py      # 🎓 tier合格制「使えるライン」判定
 │   ├── runner.py       # 🎛️ オーケストレータ (多試行集計・モデル解決)
 │   ├── compare.py      # 🆚 複数結果の横断比較レポート
 │   └── report.py       # 📊 Markdownレポート
-├── tasks/              # 🧩 同梱タスク20個 (easy 5 / medium 5 / hard 10)
+├── tasks/              # 🧩 同梱タスク40個 (L1 easy5 / L2 medium5 / L3 hard10 / L4 expert12 / L5 frontier8)
 └── config.yaml
 ```
 
@@ -216,11 +238,14 @@ tasks/tXXX_name/
 ```
 
 1. 上記レイアウトでディレクトリを作成
-2. `tasks/tasks.jsonl` に1行追加:
+2. `tasks/tasks.jsonl` に1行追加 (難易度は easy/medium/hard/expert/frontier):
    ```json
-   {"task_id": "t021", "dir": "t021_name", "difficulty": "medium", "title": "..."}
+   {"task_id": "t041", "dir": "t041_name", "difficulty": "expert", "title": "..."}
    ```
-3. 検証: `llmbench validate --tasks t021` (gold がpass / broken がfail すればOK)
+   性能制約タスクは `"perf_timeout": <秒>` を足すとそのタスクだけ個別タイムアウトになる。
+   回帰罠は `tests/` に複数テストを置く (例: `test_core.py` で既存挙動をロック、
+   `test_bug.py` でバグを捕捉)。
+3. 検証: `llmbench validate --tasks t041` (gold がpass / broken がfail すればOK)
 
 ## 🗺️ ロードマップ
 
@@ -231,6 +256,10 @@ tasks/tXXX_name/
 - [x] 🧭 usability ティア判定
 - [x] 🆚 複数モデル横断比較レポート (`compare`)
 - [x] 🔎 `model: auto` / Ollama動的モデル選択
+- [x] 🧩 難問tier (L4 expert / L5 frontier) で天井効果を打破 — 計40問
+- [x] 🎓 tier合格制「使えるライン」認証 (`certify`)
+- [x] ⏱️ タスク別 perf_timeout (性能制約タスク)
+- [ ] 🎯 実モデル較正による tier 閾値の確定 (32b dense / 3b級を追加)
 - [ ] 🐳 Docker隔離実行
 - [ ] 📥 SWE-bench Lite 公式タスクの取込
 - [ ] 🔄 GitHub repoからのタスク自動抽出
