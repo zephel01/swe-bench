@@ -41,7 +41,7 @@ pip install -e .
 導入確認：
 
 ```bash
-llmbench list-tasks      # 同梱タスク20個が一覧表示されればOK
+llmbench list-tasks      # 同梱タスク40個が一覧表示されればOK
 ```
 
 ---
@@ -132,7 +132,7 @@ llmbench models
 ## 5. ベンチマーク実行 (`run`)
 
 ```bash
-# 全20タスクを既定言語(en)で1回
+# 全40タスクを既定言語(en)で1回
 llmbench run --model local-openai
 
 # 各タスク5回 → 成功率・pass@k・usability判定
@@ -218,6 +218,31 @@ llmbench compare results/*_results.json --output results
 出力 `comparison_<stamp>.md` には、Combined降順のランキング（最良比の**相対スコア**）、
 usabilityティア比較、**タスク別Combinedマトリクス**（行内ベストを太字）が並びます。
 参照モデルを併置すると、ローカルモデルのスコアが「どの位置か」を解釈できます。
+
+---
+
+## 8.5 使えるラインを判定する (`certify`)
+
+`compare` がモデル**間**の相対比較なのに対し、`certify` は1モデルの **絶対的な到達度**を
+tier合格制で出します。難易度を tier(L1-L5) にマップし、tierごとの平均成功率/combinedが
+gate を満たすかを**独立に**評価します。
+
+```bash
+llmbench certify results/<stamp>_<model>_results.json
+```
+
+主判定は **使えるライン = L4(expert) を独立に合格**（成功率 ≥ 60% かつ combined ≥ 55）。
+参考として累積到達レベル（下位tierから連続合格した最上位）と、独立合格tier一覧も表示します。
+
+| Gate | 条件 (tier平均) | 意味 |
+|---|---|---|
+| L1 / L2 | 成功率 ≥ 90% / ≥ 85% | 基本〜単純作業 |
+| L3 hard | 成功率 ≥ 75% かつ combined ≥ 60 | 実務の単純〜中級バグ |
+| **L4 expert** | **成功率 ≥ 60% かつ combined ≥ 55** | **✅ 使えるライン** |
+| L5 frontier | 成功率 ≥ 40% | フロンティア級 |
+
+> 閾値は `llmbench/certify.py` の `DEFAULT_GATES` で調整可能。実モデル較正で確定するのが推奨。
+> `--runs 5` 程度で実行した results を渡すと、成功率(pass@1平均)が安定します。
 
 ---
 

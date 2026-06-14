@@ -13,7 +13,7 @@
 | [CHANGES.md](CHANGES.md) | 全員 | 追加機能の要約と変更履歴 |
 | **本書（運用マニュアル）** | 運用・保守・連携担当 | 出力ファイルの**仕様**・内部実装・運用上の注意・移行・自動化 |
 
-> 対象バージョン: 全20タスク・多試行(pass@k)・usability・compare・`model:auto` 対応版。
+> 対象バージョン: 全40タスク(L1-L5)・多試行(pass@k)・usability・compare・certify・`model:auto` 対応版。
 > `results.json` に `summary.usability` / `success_rate` 等を含む。
 
 ---
@@ -316,12 +316,15 @@ cat "results/$adir/t011/llm_output.txt"
 | `llmbench/report.py` | usability判定セクション・信頼性列・pass@1主指標・保守的な総合推奨・品質内訳注記 |
 | `llmbench/clients/openai_compat.py` | `model:auto` のサーバ検出（`fetch_served_model`）・APIキー環境変数展開 |
 | `llmbench/clients/ollama.py` | `list_ollama_models()`（`/api/tags`） |
-| `llmbench/cli.py` | `models` / `compare` サブコマンド・`--runs`/`--sample-temp`/`--label`/`--ollama-host` |
+| `llmbench/cli.py` | `models` / `compare` / **`certify`** サブコマンド・`--runs`/`--sample-temp`/`--label`/`--ollama-host` |
+| `llmbench/certify.py` | **新規**。難易度→tier(L1-L5)、tier別gate判定（`certify`/`render_certificate_md`）。使えるライン=L4独立合格 |
+| `llmbench/tasks.py` | `Task.perf_timeout` フィールド（tasks.jsonl の `perf_timeout` を読込） |
+| `llmbench/runner.py` | per-task `perf_timeout` を採用（未指定時は `test_timeout`） |
 | `config.yaml` | `model:auto`・`run.runs`/`sample_temp`/`ollama_host`・`usability:`・`ref-gpt` |
-| `tasks/` | 難タスク t016–t020 追加（全20タスク） |
+| `tasks/` | 難タスク t016–t020 + **L4 expert t021–t032 / L5 frontier t033–t040**（全40タスク） |
 
-> 検証状況: `llmbench validate` PASS（gold 20/20・broken 20/20）、多試行集計・usability・compare・
-> モデル解決の各単体、ruff（追加/変更ファイル指摘ゼロ）、`compileall` を確認済み。
+> 検証状況: `llmbench validate` PASS（gold 40/40・broken 40/40）、selfcheck 新20問 20/20、
+> 多試行集計・usability・compare・certify・モデル解決の各単体、ruff（指摘ゼロ）、`compileall` を確認済み。
 
 ---
 
