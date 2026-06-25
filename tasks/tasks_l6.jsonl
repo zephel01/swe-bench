@@ -1,0 +1,20 @@
+{"task_id": "t041", "dir": "t041_config_loader", "difficulty": "architect", "title": "env overrides are silently dropped"}
+{"task_id": "t042", "dir": "t042_query_builder", "difficulty": "architect", "title": "postgres dialect produces wrong placeholders"}
+{"task_id": "t043", "dir": "t043_event_sourcing", "difficulty": "architect", "title": "replay after a snapshot double-counts events"}
+{"task_id": "t044", "dir": "t044_plugin_loader", "difficulty": "architect", "title": "plugin load order is fragile and cycles are undetected"}
+{"task_id": "t045", "dir": "t045_cache_layer", "difficulty": "architect", "title": "expired cache entries are occasionally returned", "perf_timeout": 30}
+{"task_id": "t046", "dir": "t046_di_scopes", "difficulty": "architect", "title": "singleton and request lifetimes are not honored"}
+{"task_id": "t047", "dir": "t047_migration_runner", "difficulty": "architect", "title": "failed migration leaves later ones marked applied"}
+{"task_id": "t048", "dir": "t048_http_router", "difficulty": "architect", "title": "path params untyped and wildcards shadow specific routes"}
+{"task_id": "t049", "dir": "t049_dedup_perf", "difficulty": "architect", "title": "deduplication is O(n^2) on large inputs", "perf_timeout": 30}
+{"task_id": "t050", "dir": "t050_counter_race", "difficulty": "architect", "title": "counter loses increments under concurrency", "perf_timeout": 30}
+{"task_id": "t051", "dir": "t051_async_semaphore", "difficulty": "architect", "title": "a failing task deadlocks the async pool", "perf_timeout": 30}
+{"task_id": "t052", "dir": "t052_threadsafe_lru", "difficulty": "architect", "title": "LRU exceeds capacity and is not thread-safe", "perf_timeout": 30}
+{"task_id": "t053", "dir": "t053_html_escape_ctx", "difficulty": "architect", "title": "attribute values are not escaped for their context"}
+{"task_id": "t054", "dir": "t054_sql_param_nested", "difficulty": "architect", "title": "nested conditions interpolate values instead of parameterizing"}
+{"task_id": "t055", "dir": "t055_nl_date", "difficulty": "architect", "title": "relative date phrases are mis-parsed"}
+{"task_id": "t056", "dir": "t056_config_merge", "difficulty": "architect", "title": "config merge clobbers nested structures"}
+{"task_id": "t057", "dir": "t057_csv_dialect", "difficulty": "architect", "title": "CSV parser assumes commas and ignores quoting"}
+{"task_id": "t058", "dir": "t058_version_range", "difficulty": "architect", "title": "only exact version matches work"}
+{"task_id": "t059", "dir": "t059_kahan_sum", "difficulty": "architect", "title": "floating-point sum drifts from the true value", "perf_timeout": 30}
+{"task_id": "t060", "dir": "t060_unicode_eq", "difficulty": "architect", "title": "visually identical strings compare as different"}

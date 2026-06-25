@@ -34,10 +34,24 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
         "--tasks", default=None,
         help="カンマ区切りのタスクID (例: t001,t003)。省略時は全タスク",
     )
+    parser.add_argument(
+        "--with-l6", action="store_true", dest="with_l6",
+        help="既定40問に加えて L6 (architect tier) の追加20問を含める",
+    )
+    parser.add_argument(
+        "--l6-ledger", default="tasks_l6.jsonl", dest="l6_ledger",
+        help="L6 追加台帳のファイル名 (tasks-dir 内。既定: tasks_l6.jsonl)",
+    )
+
+
+def _ledgers(args) -> list[str]:
+    if getattr(args, "with_l6", False):
+        return ["tasks.jsonl", args.l6_ledger]
+    return ["tasks.jsonl"]
 
 
 def cmd_list_tasks(args) -> int:
-    tasks = load_tasks(Path(args.tasks_dir))
+    tasks = load_tasks(Path(args.tasks_dir), ledgers=_ledgers(args))
     for t in tasks:
         print(f"{t.task_id}  [{t.difficulty:6s}]  {t.title}  ({len(t.files)} files)")
     print(f"total: {len(tasks)}")
@@ -81,7 +95,7 @@ def cmd_run(args) -> int:
         config.setdefault("run", {})["issue_lang"] = args.lang
     if getattr(args, "ollama_host", None):
         config.setdefault("run", {})["ollama_host"] = args.ollama_host
-    runner = BenchmarkRunner(config, Path(args.tasks_dir))
+    runner = BenchmarkRunner(config, Path(args.tasks_dir), ledgers=_ledgers(args))
     only = args.tasks.split(",") if args.tasks else None
     try:
         run = runner.run(
@@ -138,7 +152,7 @@ def cmd_validate(args) -> int:
     config.setdefault("models", {})
     config["models"]["mock-gold"] = {"type": "mock", "mode": "gold"}
     config["models"]["mock-broken"] = {"type": "mock", "mode": "broken"}
-    runner = BenchmarkRunner(config, Path(args.tasks_dir))
+    runner = BenchmarkRunner(config, Path(args.tasks_dir), ledgers=_ledgers(args))
     only = args.tasks.split(",") if args.tasks else None
 
     print("=== mock-gold (全タスクresolvedになるべき) ===")

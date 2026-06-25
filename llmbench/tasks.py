@@ -30,28 +30,44 @@ class Task:
         }
 
 
-def load_tasks(tasks_root: Path, only: list[str] | None = None) -> list[Task]:
-    """tasks.jsonl からタスク一覧をロードする."""
-    jsonl = tasks_root / "tasks.jsonl"
+def load_tasks(
+    tasks_root: Path,
+    only: list[str] | None = None,
+    ledgers: list[str] | None = None,
+) -> list[Task]:
+    """1つ以上の台帳(jsonl)からタスク一覧をロードする.
+
+    ledgers 省略時は ["tasks.jsonl"] のみ。L6 などの任意 tier を上乗せする場合は
+    ["tasks.jsonl", "tasks_l6.jsonl"] のように渡す。重複 task_id は先勝ち。
+    """
+    ledgers = ledgers or ["tasks.jsonl"]
     tasks = []
-    for line in jsonl.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
+    seen: set[str] = set()
+    for ledger in ledgers:
+        jsonl = tasks_root / ledger
+        if not jsonl.exists():
             continue
-        rec = json.loads(line)
-        task_dir = tasks_root / rec["dir"]
-        files = [
-            str(p.relative_to(task_dir / "buggy_code"))
-            for p in sorted((task_dir / "buggy_code").rglob("*.py"))
-        ]
-        t = Task(
-            task_id=rec["task_id"],
-            difficulty=rec["difficulty"],
-            title=rec["title"],
-            dir=task_dir,
-            files=files,
-            perf_timeout=rec.get("perf_timeout"),
-        )
-        if only and t.task_id not in only:
-            continue
-        tasks.append(t)
+        for line in jsonl.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            task_dir = tasks_root / rec["dir"]
+            files = [
+                str(p.relative_to(task_dir / "buggy_code"))
+                for p in sorted((task_dir / "buggy_code").rglob("*.py"))
+            ]
+            t = Task(
+                task_id=rec["task_id"],
+                difficulty=rec["difficulty"],
+                title=rec["title"],
+                dir=task_dir,
+                files=files,
+                perf_timeout=rec.get("perf_timeout"),
+            )
+            if only and t.task_id not in only:
+                continue
+            if t.task_id in seen:
+                continue
+            seen.add(t.task_id)
+            tasks.append(t)
     return tasks
