@@ -1,8 +1,15 @@
 def dedup(items):
-    seen = set()
+    seen_hashable = set()
+    seen_unhashable = []
     out = []
     for item in items:
-        if item not in seen:
-            seen.add(item)
-            out.append(item)
+        try:
+            if item in seen_hashable:
+                continue
+            seen_hashable.add(item)
+        except TypeError:
+            if item in seen_unhashable:
+                continue
+            seen_unhashable.append(item)
+        out.append(item)
     return out

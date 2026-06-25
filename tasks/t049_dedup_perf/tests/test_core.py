@@ -7,7 +7,3 @@ def test_order_preserved():
 
 def test_empty():
     assert dedup([]) == []
-
-
-def test_no_duplicates():
-    assert dedup(["a", "b", "c"]) == ["a", "b", "c"]

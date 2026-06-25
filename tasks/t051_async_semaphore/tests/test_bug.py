@@ -20,12 +20,34 @@ def test_exception_does_not_exhaust_pool():
                 await pool.run(boom)
             except ValueError:
                 pass
-        # If release leaked, these acquisitions would block forever.
         return await asyncio.wait_for(
             asyncio.gather(*[pool.run(ok) for _ in range(3)]), timeout=2.0
         )
 
     assert asyncio.run(main()) == [1, 1, 1]
+
+
+def test_cancellation_releases_slot():
+    pool = LimitedPool(1)
+
+    async def main():
+        async def blocker():
+            await asyncio.sleep(10)
+
+        async def quick():
+            await asyncio.sleep(0)
+            return 1
+
+        task = asyncio.ensure_future(pool.run(blocker))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return await asyncio.wait_for(pool.run(quick), timeout=2.0)
+
+    assert asyncio.run(main()) == 1
 
 
 def test_limit_respected():

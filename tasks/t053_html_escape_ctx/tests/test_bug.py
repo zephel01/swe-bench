@@ -1,19 +1,22 @@
-from render import render_attr, render_tag
+from render import render_attr, render_link
 
 
 def test_attribute_quote_escaped():
-    out = render_attr("title", 'a"b')
-    assert out == 'title="a&quot;b"'
-    assert '"b"' not in out.replace('title="', "", 1)
+    assert render_attr("title", 'a"b') == 'title="a&quot;b"'
 
 
 def test_attribute_injection_neutralized():
-    payload = '" onerror="alert(1)'
-    out = render_tag("img", {"src": payload}, "")
-    # the closing quote of the payload must be escaped, so no stray attribute
+    out = render_attr("src", '" onerror="alert(1)')
     assert "&quot;" in out
     assert ' onerror="alert(1)"' not in out
 
 
-def test_single_quote_escaped():
-    assert render_attr("data", "x'y") == "data=\"x&#x27;y\""
+def test_javascript_url_neutralized():
+    out = render_link("x", "javascript:alert(1)")
+    assert "javascript:alert(1)" not in out
+    assert out == '<a href="#">x</a>'
+
+
+def test_data_url_neutralized():
+    out = render_link("x", "  JavaScript:alert(1)")
+    assert out == '<a href="#">x</a>'

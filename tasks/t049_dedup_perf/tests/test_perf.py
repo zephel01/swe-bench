@@ -3,7 +3,7 @@ import time
 from dedup import dedup
 
 
-def test_large_input_is_fast():
+def test_large_hashable_input_is_fast():
     data = list(range(40_000)) * 2
     start = time.perf_counter()
     out = dedup(data)

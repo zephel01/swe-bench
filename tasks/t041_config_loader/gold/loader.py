@@ -1,5 +1,5 @@
 from defaults import DEFAULTS
-from validate import coerce_types, fill_defaults
+from validate import coerce_types, fill_layers
 
 ENV_PREFIX = "CONFIG_"
 
@@ -12,7 +12,7 @@ def _extract(env):
     return out
 
 
-def load_config(env):
+def load_config(env, file_config=None):
     overrides = _extract(env)
-    merged = fill_defaults(overrides, DEFAULTS)
+    merged = fill_layers(DEFAULTS, file_config or {}, overrides)
     return coerce_types(merged, DEFAULTS)

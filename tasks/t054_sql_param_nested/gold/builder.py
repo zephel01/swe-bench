@@ -8,6 +8,13 @@ def build(cond):
         vals = list(vals)
         holders = ", ".join("?" for _ in vals)
         return f"{col} IN ({holders})", vals
+    if typ == "between":
+        _, col, lo, hi = cond
+        return f"{col} BETWEEN ? AND ?", [lo, hi]
+    if typ == "not":
+        _, sub = cond
+        sql, params = build(sub)
+        return f"NOT ({sql})", params
     if typ in ("and", "or"):
         _, subs = cond
         parts = []

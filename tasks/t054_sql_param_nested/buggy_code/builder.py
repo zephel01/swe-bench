@@ -12,6 +12,12 @@ def _render(cond):
     if typ == "in":
         _, col, vals = cond
         return f"{col} IN ({', '.join(_literal(v) for v in vals)})"
+    if typ == "between":
+        _, col, lo, hi = cond
+        return f"{col} BETWEEN {_literal(lo)} AND {_literal(hi)}"
+    if typ == "not":
+        _, sub = cond
+        return f"NOT ({_render(sub)})"
     if typ in ("and", "or"):
         _, subs = cond
         joiner = " AND " if typ == "and" else " OR "
