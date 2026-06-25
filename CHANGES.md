@@ -1,4 +1,22 @@
-# 🆕 難問tier (L4/L5) + 使えるライン認証 (certify)
+# 🆕 L6 architect tier (t041–t060) — 任意オプション `--with-l6`
+
+frontier(L5)でも上位帯(27B〜35B級)が再び天井効果を起こすため、**さらに難しい
+20問 (L6 architect)** を追加しました。**既定の挙動は不変**（従来どおり40問）で、
+`--with-l6` を付けたときだけ +20 されます。
+
+| 追加 | 内容 |
+|---|---|
+| 🏛️ L6 architect (t041–t060, 20問) | 複数ファイル8 / 非機能(perf)6 / 曖昧仕様4 / 罠・敵対2。issueは症状のみ |
+| 🔀 `--with-l6` / `--l6-ledger` | 別台帳 `tasks/tasks_l6.jsonl` を任意マージ（既定40 → 60）。`tasks.jsonl` は不変 |
+| 🧩 複数台帳ローダ | `load_tasks(..., ledgers=[...])`（id先勝ち）・`BenchmarkRunner(ledgers=...)` |
+| 🎓 certify L6 gate | `architect→L6`、暫定 pass@1 ≥ 55% かつ combined ≥ 60（実モデル較正で確定） |
+
+**検証**: L6 selfcheck 20/20（gold緑/buggy赤/ruff0/CC A–B）、`validate --with-l6`
+gold 20/20・broken 20/20、`list-tasks` 40（既定）/ 60（`--with-l6`）。
+
+---
+
+# 難問tier (L4/L5) + 使えるライン認証 (certify)
 
 上位ローカルコーダーが既存20問(easy/medium/hard)で頭打ちになり差がつかない
 **天井効果**を解消するため、難問tierを追加し、「ここまでクリアできれば使える」を
