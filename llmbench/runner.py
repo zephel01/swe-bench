@@ -135,10 +135,11 @@ class RunResult:
 
 
 class BenchmarkRunner:
-    def __init__(self, config: dict, tasks_root: Path):
+    def __init__(self, config: dict, tasks_root: Path, ledgers: list[str] | None = None):
         self.config = config
         self.tasks_root = tasks_root
         self.run_cfg = config.get("run", {})
+        self.ledgers = ledgers or ["tasks.jsonl"]
         self.quality_cfg = config.get("quality", {})
         self.scoring_cfg = config.get("scoring", {})
         self.usability_cfg = config.get("usability", {})
@@ -237,7 +238,7 @@ class BenchmarkRunner:
         else:
             run_label = model_name
 
-        tasks = load_tasks(self.tasks_root, only=only_tasks)
+        tasks = load_tasks(self.tasks_root, only=only_tasks, ledgers=self.ledgers)
         run = RunResult(model=run_label, issue_lang=lang, runs=runs)
 
         for i, task in enumerate(tasks, 1):

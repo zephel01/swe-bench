@@ -24,9 +24,10 @@ DIFFICULTY_TO_TIER = {
     "hard": "L3",
     "expert": "L4",
     "frontier": "L5",
+    "architect": "L6",
 }
 
-TIER_ORDER = ["L1", "L2", "L3", "L4", "L5"]
+TIER_ORDER = ["L1", "L2", "L3", "L4", "L5", "L6"]
 
 TIER_LABEL = {
     "L1": "L1 easy",
@@ -34,6 +35,7 @@ TIER_LABEL = {
     "L3": "L3 hard",
     "L4": "L4 expert (使えるライン)",
     "L5": "L5 frontier",
+    "L6": "L6 architect",
 }
 
 # gate: そのtierのタスク平均が満たすべき下限。
@@ -44,6 +46,8 @@ DEFAULT_GATES = {
     "L3": {"min_success": 0.75, "min_combined": 60.0},
     "L4": {"min_success": 0.60, "min_combined": 55.0},
     "L5": {"min_success": 0.40, "min_combined": 0.0},
+    # L6 (architect): 上位帯の分離用。Phase 3 較正後に数値確定 (暫定値)。
+    "L6": {"min_success": 0.55, "min_combined": 60.0},
 }
 
 # 到達レベルの解釈 (レポート用の一言)。
@@ -54,6 +58,7 @@ LEVEL_VERDICT = {
     "L3": "実務の単純〜中級バグは任せられる。",
     "L4": "✅ 使えるライン到達。監督付きで実務投入できる。",
     "L5": "フロンティア級。複雑案件も補助付きで任せられる。",
+    "L6": "アーキテクト級。リポジトリ規模の診断・設計判断まで任せられる。",
 }
 
 
