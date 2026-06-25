@@ -1,10 +1,10 @@
-# Bug: config merge clobbers nested structures
+# Bug: config merge mishandles nested/edge cases
 
-Merging two config dicts uses a shallow update, so a nested dict on the right
-replaces the whole nested dict on the left, and lists are replaced instead of
-combined.
+Merging two config dicts gets several cases wrong: nested lists are not
+concatenated, an explicit `None` on the right is dropped instead of overriding,
+and a type change between sides is mishandled.
 
-The intended rules, inferred from how configs are layered: dicts merge
-recursively, lists from both sides are concatenated, and a scalar (or a
-different type) on the right replaces the left value. Flat scalar replacement and
-disjoint keys already work.
+Intended rules (applied at every depth): dicts merge recursively; lists from
+both sides concatenate (including nested lists); any other value on the right
+replaces the left — including dict-over-scalar, scalar-over-dict, and an explicit
+`None`. Flat scalar replace, disjoint keys, and one-level dict merge already work.

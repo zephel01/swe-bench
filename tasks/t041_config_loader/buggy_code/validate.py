@@ -1,6 +1,7 @@
-def fill_defaults(overrides, defaults):
-    merged = dict(overrides)
-    merged.update(defaults)
+def fill_layers(defaults, file_config, overrides):
+    merged = dict(defaults)
+    merged.update(overrides)
+    merged.update(file_config)
     return merged
 
 

@@ -1,8 +1,9 @@
 # Bug: nested conditions interpolate values instead of parameterizing
 
-`build(cond)` parameterizes a single `eq`/`in` condition correctly, but once you
-nest them under `and`/`or` the values are interpolated straight into the SQL
-string and the parameter list comes back empty — an injection risk.
+`build(cond)` parameterizes a single `eq`/`in`, but other node types and any
+nesting fall back to interpolating values straight into the SQL string with an
+empty parameter list — an injection risk. Affected: `and`/`or`, `not`, and
+`between` (which contributes two params, `lo` then `hi`).
 
 Walk the condition tree to any depth, emit one placeholder per value, and return
-all values in the parameter list in order. Never interpolate a value.
+every value in the parameter list in left-to-right order. Never interpolate.

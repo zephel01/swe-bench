@@ -1,7 +1,13 @@
-# Bug: deduplication is too slow on large inputs
+# Bug: deduplication is slow and breaks on unhashable items
 
-`dedup(items)` must remove duplicates while keeping the first occurrence of each
-element, in input order. It is correct on small inputs but does not scale: a
-list of ~10k unique elements (each appearing twice) does not finish in time.
+`dedup(items)` must keep the first occurrence of each element in input order.
+Two problems:
 
-Keep the order-preserving behavior and make it run in linear time.
+- It does not scale: a list of ~40k unique hashable elements (each appearing
+  twice) does not finish in time.
+- The input may also contain **unhashable** elements (e.g. dicts or lists);
+  these must still be de-duplicated by equality, and a list may freely mix
+  hashable and unhashable items.
+
+Keep the order-preserving behavior, run in (near) linear time for hashable
+elements, and handle unhashable elements correctly.

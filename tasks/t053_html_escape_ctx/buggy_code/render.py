@@ -6,6 +6,5 @@ def render_attr(name, value):
     return f'{name}="{escape_text(value)}"'
 
 
-def render_tag(tag, attrs, text):
-    rendered = "".join(f" {render_attr(k, v)}" for k, v in attrs.items())
-    return f"<{tag}{rendered}>{escape_text(text)}</{tag}>"
+def render_link(text, href):
+    return f'<a href="{escape_text(href)}">{escape_text(text)}</a>'
