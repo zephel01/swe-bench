@@ -1,4 +1,4 @@
-# 🧩 タスク仕様書 — t001〜t040
+# 🧩 タスク仕様書 — t001〜t040 (+ L6 architect t041〜t060)
 
 各タスクが**何を調査しているか**(LLMのどの能力を測るか)と**採点基準**の一覧。
 
@@ -197,6 +197,59 @@
 
 ---
 
+## L6 architect (t041〜t060) — 任意オプション `--with-l6`
+
+上位帯(27B〜35B級)の天井効果を破るための**追加20問**。既定の40問評価には含まれず、
+別台帳 `tasks/tasks_l6.jsonl` に置かれ、`--with-l6` 指定時のみ評価される
+(`difficulty=architect` → certify では **L6**)。全問「issueは症状のみ・原因と修正範囲は
+モデルに委ねる」設計で、`test_core.py`(回帰罠) と `test_bug.py`(バグ捕捉)、一部に
+`test_perf.py`(perf_timeout) を持つ。
+
+### 複数ファイル・リポ規模 (t041〜t048)
+
+| ID | 構成 | 仕込んだバグ | 主に測る力 |
+|---|---|---|---|
+| t041 config_loader | defaults/loader/validate | merge順でenv overrideが既定に潰される | 複数モジュールの実行順追跡 |
+| t042 query_builder | query.py + dialect.py | PG方言でプレースホルダ($1..)未生成 | 抽象境界をまたぐ契約 |
+| t043 event_sourcing | store/projection/replay | snapshot offset無視で二重計上・非冪等 | 状態復元の不変条件 |
+| t044 plugin_loader | registry.py + loader.py | 循環未検出・解決順が登録順依存 | グラフ依存解決+順序非依存 |
+| t045 cache_layer | cache/backend/serializer | 期限境界(<)で期限切れを返す・退避漏れ | レイヤ間の責務配置 |
+| t046 di_scopes | container.py + scopes.py | singleton/request/transientを区別せず生成 | ライフタイム管理 |
+| t047 migration_runner | runner.py + graph.py | 適用記録が非原子的で後続を誤適用扱い | 部分失敗時の整合性 |
+| t048 http_router | router.py + params.py | 型変換なし・ワイルドカードが具体ルートを覆う | ルーティング優先規則+型 |
+
+### 非機能要件 (t049〜t054) — `perf_timeout` 系
+
+| ID | 構成 | 仕込んだバグ | 主に測る力 |
+|---|---|---|---|
+| t049 dedup_perf | dedup.py | `in list` で O(n²) | 計算量の意識 |
+| t050 counter_race | counter.py | 非アトミックな read-modify-write | 並行時の不変条件 |
+| t051 async_semaphore | pool.py | 例外経路で release 漏れ→枯渇 | 例外安全な資源管理 |
+| t052 threadsafe_lru | lru.py | 容量off-by-one・ロック無し | データ構造+並行性 |
+| t053 html_escape_ctx | render.py | 属性文脈のエスケープ欠如(XSS) | セキュリティの文脈依存 |
+| t054 sql_param_nested | builder.py | ネスト条件で値を文字列補間 | 再帰構造の安全な走査 |
+
+### 曖昧な仕様 (t055〜t058)
+
+| ID | 構成 | 仕込んだバグ | 主に測る力 |
+|---|---|---|---|
+| t055 nl_date | nldate.py | 相対表現(next/in N days/週境界)未実装 | 曖昧仕様からの意図抽出 |
+| t056 config_merge | merge.py | 浅いupdateでネスト/リスト規則が未分化 | 規則の階層的適用 |
+| t057 csv_dialect | sniff.py | 区切りカンマ固定・クオート無視 | 例示からの一般化(RFC4180) |
+| t058 version_range | vrange.py | 等値のみ・caret/tilde/複合未実装 | ドメイン記法の意味論 |
+
+### 罠・敵対ロジック (t059〜t060)
+
+| ID | 構成 | 仕込んだバグ | 主に測る力 |
+|---|---|---|---|
+| t059 kahan_sum | fsum.py | 単純加算で桁落ち(補正なし) | 数値的安定性 |
+| t060 unicode_eq | ueq.py | 正規化なしの単純比較 | ユニコードの落とし穴 |
+
+> 検証は `python3 _OUTPUTS/llm-bench-hard-l6/scripts/selfcheck_l6.py` または
+> `llmbench validate --with-l6 --tasks t041,...,t060`。selfcheck 20/20 PASS 済み。
+
+---
+
 ## 設計意図のまとめ
 
 | 観点 | 対応タスク |
@@ -205,12 +258,14 @@
 | 言語特有の罠 | t003 (mutable default), t011 (OrderedDict), t014 (heapq) |
 | 仕様文からの実装補完 | t004, t007, t010, t015 |
 | エッジケース設計 | t005, t001(n=0), t004(空), t007(記号のみ) |
-| 複数ファイルのバグ局所化 + 無関係コード不変更 | t012, t014, t015, t033-t040 |
+| 複数ファイルのバグ局所化 + 無関係コード不変更 | t012, t014, t015, t033-t040, t041-t048 |
 | 明示的制約の遵守 | t014 (FIFO維持), t015 (非破壊) |
-| regression検出 (隠しテストが本体も再検証) | t008, t011, t012, t013, t033-t040 (test_core) |
+| regression検出 (隠しテストが本体も再検証) | t008, t011, t012, t013, t033-t060 (test_core) |
 | 仕様の細部理解・アルゴリズム正確性 | t021-t032 (expert) |
-| 症状からの原因診断 (issueに修正手順なし) | t021-t040 |
+| 症状からの原因診断 (issueに修正手順なし) | t021-t060 |
 | 複数の結合バグ (片方修正では通らない) | t035, t037, t039, t040 |
-| 性能制約 (perf_timeout) | t039, t040 |
+| 性能制約 (perf_timeout) | t039, t040, t045, t049-t052, t059 |
+| リポジトリ規模の診断・設計判断 (architect) | t041-t060 (--with-l6) |
+| 曖昧仕様からの意図抽出 / 敵対入力・数値安定性 | t055-t058 / t053, t059, t060 |
 
 難易度が上がるほど「テストを通す」だけでなく「**正しい箇所だけを最小限に直す**」判断が要求され、機能スコアと品質スコアの乖離が観測しやすい構成になっている。

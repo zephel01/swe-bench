@@ -13,7 +13,7 @@
 | [CHANGES.md](CHANGES.md) | 全員 | 追加機能の要約と変更履歴 |
 | **本書（運用マニュアル）** | 運用・保守・連携担当 | 出力ファイルの**仕様**・内部実装・運用上の注意・移行・自動化 |
 
-> 対象バージョン: 全40タスク(L1-L5)・多試行(pass@k)・usability・compare・certify・`model:auto` 対応版。
+> 対象バージョン: 既定40タスク(L1-L5) + 任意L6 architect 20タスク(`--with-l6`)・多試行(pass@k)・usability・compare・certify(L1-L6)・`model:auto` 対応版。
 > `results.json` に `summary.usability` / `success_rate` 等を含む。
 
 ---
@@ -316,14 +316,15 @@ cat "results/$adir/t011/llm_output.txt"
 | `llmbench/report.py` | usability判定セクション・信頼性列・pass@1主指標・保守的な総合推奨・品質内訳注記 |
 | `llmbench/clients/openai_compat.py` | `model:auto` のサーバ検出（`fetch_served_model`）・APIキー環境変数展開 |
 | `llmbench/clients/ollama.py` | `list_ollama_models()`（`/api/tags`） |
-| `llmbench/cli.py` | `models` / `compare` / **`certify`** サブコマンド・`--runs`/`--sample-temp`/`--label`/`--ollama-host` |
-| `llmbench/certify.py` | **新規**。難易度→tier(L1-L5)、tier別gate判定（`certify`/`render_certificate_md`）。使えるライン=L4独立合格 |
-| `llmbench/tasks.py` | `Task.perf_timeout` フィールド（tasks.jsonl の `perf_timeout` を読込） |
-| `llmbench/runner.py` | per-task `perf_timeout` を採用（未指定時は `test_timeout`） |
+| `llmbench/cli.py` | `models` / `compare` / **`certify`** サブコマンド・`--runs`/`--sample-temp`/`--label`/`--ollama-host`・**`--with-l6`/`--l6-ledger`** |
+| `llmbench/certify.py` | **新規**。難易度→tier(L1-L6)、tier別gate判定（`certify`/`render_certificate_md`）。使えるライン=L4独立合格・**architect→L6 gate** |
+| `llmbench/tasks.py` | `Task.perf_timeout` フィールド・**`load_tasks(..., ledgers=[...])` で複数台帳マージ（id先勝ち）** |
+| `llmbench/runner.py` | per-task `perf_timeout` を採用（未指定時は `test_timeout`）・**`BenchmarkRunner(..., ledgers=...)`** |
 | `config.yaml` | `model:auto`・`run.runs`/`sample_temp`/`ollama_host`・`usability:`・`ref-gpt` |
-| `tasks/` | 難タスク t016–t020 + **L4 expert t021–t032 / L5 frontier t033–t040**（全40タスク） |
+| `tasks/` | 難タスク t016–t020 + **L4 expert t021–t032 / L5 frontier t033–t040**（既定40タスク）+ **L6 architect t041–t060（別台帳 `tasks_l6.jsonl`・`--with-l6` で有効化）** |
 
-> 検証状況: `llmbench validate` PASS（gold 40/40・broken 40/40）、selfcheck 新20問 20/20、
+> 検証状況: `llmbench validate` PASS（gold 40/40・broken 40/40）、selfcheck 既存20問 + **L6 20問 20/20**、
+> `validate --with-l6` で gold 20/20・broken 20/20、`list-tasks` 40（既定）/ 60（`--with-l6`）、
 > 多試行集計・usability・compare・certify・モデル解決の各単体、ruff（指摘ゼロ）、`compileall` を確認済み。
 
 ---
