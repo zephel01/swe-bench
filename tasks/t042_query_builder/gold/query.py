@@ -1,14 +1,21 @@
-def build_select(table, where, dialect):
-    keys = list(where.keys())
-    params = [where[k] for k in keys]
-    clauses = [f"{k} = {dialect.placeholder(i)}" for i, k in enumerate(keys, 1)]
+def build_select(table, where, dialect, in_clause=None):
+    params = []
+    clauses = []
+    index = 1
+    for key in where:
+        clauses.append(f"{key} = {dialect.placeholder(index)}")
+        params.append(where[key])
+        index += 1
+    if in_clause:
+        col, values = in_clause
+        values = list(values)
+        holders = []
+        for value in values:
+            holders.append(dialect.placeholder(index))
+            params.append(value)
+            index += 1
+        clauses.append(f"{col} IN ({', '.join(holders)})")
     sql = f"SELECT * FROM {table}"  # noqa: S608
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     return sql, params
-
-
-def build_where_in(column, values, dialect):
-    values = list(values)
-    holders = ", ".join(dialect.placeholder(i) for i in range(1, len(values) + 1))
-    return f"{column} IN ({holders})", values

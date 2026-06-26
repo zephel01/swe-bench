@@ -1,22 +1,16 @@
 from dialect import PostgresDialect
-from query import build_select, build_where_in
+from query import build_select
 
 
-def test_pg_select_numbered_placeholders():
+def test_pg_multiple_eq_numbered():
     sql, params = build_select("u", {"a": 1, "b": 2}, PostgresDialect())
     assert sql == "SELECT * FROM u WHERE a = $1 AND b = $2"
     assert params == [1, 2]
 
 
-def test_pg_in_numbered():
-    sql, params = build_where_in("id", [10, 20, 30], PostgresDialect())
-    assert sql == "id IN ($1, $2, $3)"
-    assert params == [10, 20, 30]
-
-
-def test_values_are_not_interpolated():
-    evil = "1); DROP TABLE users;--"
-    sql, params = build_select("u", {"name": evil}, PostgresDialect())
-    assert evil not in sql
-    assert params == [evil]
-    assert sql == "SELECT * FROM u WHERE name = $1"
+def test_pg_eq_and_in_continuous_numbering():
+    sql, params = build_select(
+        "u", {"a": 1}, PostgresDialect(), in_clause=("id", [7, 8, 9])
+    )
+    assert sql == "SELECT * FROM u WHERE a = $1 AND id IN ($2, $3, $4)"
+    assert params == [1, 7, 8, 9]

@@ -1,8 +1,7 @@
 def merge(a, b):
-    out = dict(a)
     for key, value in b.items():
-        if key in a and isinstance(a[key], dict):
-            out[key] = merge(a[key], value)
-        elif value is not None:
-            out[key] = value
-    return out
+        if key in a and isinstance(a[key], dict) and isinstance(value, dict):
+            merge(a[key], value)
+        else:
+            a[key] = value
+    return a

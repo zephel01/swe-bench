@@ -1,9 +1,13 @@
-# Bug: nested conditions interpolate values instead of parameterizing
+# Bug: nested conditions interpolate, and PG numbering is missing
 
-`build(cond)` parameterizes a single `eq`/`in`, but other node types and any
-nesting fall back to interpolating values straight into the SQL string with an
-empty parameter list — an injection risk. Affected: `and`/`or`, `not`, and
-`between` (which contributes two params, `lo` then `hi`).
+`build(cond, dialect)` parameterizes a single `eq`/`in`, but two things fail:
 
-Walk the condition tree to any depth, emit one placeholder per value, and return
-every value in the parameter list in left-to-right order. Never interpolate.
+- Once conditions nest under `and`/`or`, values are interpolated straight into
+  the SQL string with an empty parameter list (injection risk).
+- With the Postgres dialect, placeholders must be a single running `$1, $2, ...`
+  counter threaded through the whole (recursive) tree; today nested nodes don't
+  use the dialect at all.
+
+Walk the tree to any depth, emit one placeholder per value with continuous
+numbering, and return all values in left-to-right order. SQLite single
+conditions already work.

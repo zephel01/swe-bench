@@ -14,5 +14,5 @@ def _extract(env):
 
 def load_config(env, file_config=None):
     overrides = _extract(env)
-    merged = fill_layers(DEFAULTS, file_config or {}, overrides)
-    return coerce_types(merged, DEFAULTS)
+    coerced_env = coerce_types(overrides, DEFAULTS)
+    return fill_layers(DEFAULTS, file_config or {}, coerced_env)

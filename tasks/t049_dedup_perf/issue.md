@@ -1,13 +1,13 @@
-# Bug: deduplication is slow and breaks on unhashable items
+# Bug: dedup ignores the key function, is slow, and breaks on unhashable
 
-`dedup(items)` must keep the first occurrence of each element in input order.
-Two problems:
+`dedup(items, key=None)` keeps the first occurrence of each element in order.
+Problems:
 
-- It does not scale: a list of ~40k unique hashable elements (each appearing
-  twice) does not finish in time.
-- The input may also contain **unhashable** elements (e.g. dicts or lists);
-  these must still be de-duplicated by equality, and a list may freely mix
-  hashable and unhashable items.
+- The optional `key` callable is ignored — items are compared whole instead of
+  by `key(item)`, so de-duplication by a field does not work.
+- It does not scale: ~40k unique elements (each twice) do not finish in time.
+- Items (or their keys) may be **unhashable** (dicts/lists); these must still
+  de-duplicate by equality.
 
-Keep the order-preserving behavior, run in (near) linear time for hashable
-elements, and handle unhashable elements correctly.
+Keep first-occurrence order, run in (near) linear time for hashable keys, honor
+`key`, and handle unhashable keys.
