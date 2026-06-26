@@ -1,10 +1,11 @@
-# Bug: config merge mishandles nested/edge cases
+# Bug: merge replaces nested lists and mutates its inputs
 
-Merging two config dicts gets several cases wrong: nested lists are not
-concatenated, an explicit `None` on the right is dropped instead of overriding,
-and a type change between sides is mishandled.
+`merge(a, b)` should deep-merge config: dicts merge recursively, lists from both
+sides concatenate (at any depth), and any other value on the right replaces the
+left (including dict-over-scalar and scalar-over-dict). Two faults:
 
-Intended rules (applied at every depth): dicts merge recursively; lists from
-both sides concatenate (including nested lists); any other value on the right
-replaces the left — including dict-over-scalar, scalar-over-dict, and an explicit
-`None`. Flat scalar replace, disjoint keys, and one-level dict merge already work.
+- nested lists are replaced instead of concatenated;
+- the function mutates its arguments in place — callers' original `a` (and its
+  nested dicts) must be left unchanged; `merge` must return a fresh structure.
+
+Flat scalar replace, disjoint keys, and one-level dict merge already work.

@@ -1,31 +1,26 @@
-from builder import build
+from builder import PostgresDialect, build
 
 
-def test_nested_and_collects_params():
-    sql, params = build(("and", [("eq", "a", 1), ("eq", "b", 2)]))
-    assert sql.count("?") == 2
-    assert params == [1, 2]
-
-
-def test_between_collects_two_params_in_order():
-    sql, params = build(("between", "age", 18, 65))
-    assert sql == "age BETWEEN ? AND ?"
-    assert params == [18, 65]
-
-
-def test_not_wraps_and_keeps_params():
-    sql, params = build(("not", ("eq", "a", 5)))
-    assert sql == "NOT (a = ?)"
-    assert params == [5]
-
-
-def test_deep_mixed_param_order_no_interpolation():
-    evil = "x'; DROP TABLE t;--"
-    cond = ("or", [
-        ("and", [("eq", "name", evil), ("between", "age", 18, 65)]),
-        ("not", ("in", "id", [7, 8])),
-    ])
+def test_nested_collects_params_sqlite():
+    cond = ("or", [("eq", "a", 1), ("in", "b", [2, 3])])
     sql, params = build(cond)
+    assert sql.count("?") == 3
+    assert params == [1, 2, 3]
+    assert "1" not in sql
+
+
+def test_nested_pg_global_numbering():
+    cond = ("and", [
+        ("eq", "a", 1),
+        ("or", [("eq", "b", 2), ("in", "c", [3, 4])]),
+    ])
+    sql, params = build(cond, PostgresDialect())
+    assert sql == "(a = $1) AND ((b = $2) OR (c IN ($3, $4)))"
+    assert params == [1, 2, 3, 4]
+
+
+def test_no_interpolation_when_nested():
+    evil = "x'; DROP TABLE t;--"
+    sql, params = build(("and", [("eq", "name", evil), ("eq", "ok", 1)]))
     assert evil not in sql
-    assert sql.count("?") == 5
-    assert params == [evil, 18, 65, 7, 8]
+    assert params == [evil, 1]

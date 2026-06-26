@@ -1,9 +1,11 @@
-# Bug: Postgres dialect produces wrong placeholders
+# Bug: Postgres placeholders are wrong (numbering)
 
-`build_select` and `build_where_in` work for the SQLite dialect, but with the
-Postgres dialect the placeholders come out as `?` instead of the numbered
-`$1, $2, ...` Postgres expects, so the parameters bind in the wrong positions.
+`build_select` supports equality conditions and an optional `IN` clause. With
+the Postgres dialect two things break:
 
-Both dialects must emit a placeholder string whose order lines up with the
-returned parameter list, and values must always travel as parameters (never
-interpolated into the SQL string).
+- equality conditions all render as `$1` instead of `$1, $2, ...`;
+- the `IN` clause restarts placeholder numbering (and ignores the dialect),
+  instead of continuing the running index after the equality params.
+
+Placeholders must be numbered with a single running counter across all clauses
+so they line up with the parameter list in order. SQLite (`?`) already works.

@@ -1,3 +1,13 @@
+class SQLiteDialect:
+    def placeholder(self, index):
+        return "?"
+
+
+class PostgresDialect:
+    def placeholder(self, index):
+        return f"${index}"
+
+
 def _literal(value):
     if isinstance(value, str):
         return "'" + value + "'"
@@ -12,12 +22,6 @@ def _render(cond):
     if typ == "in":
         _, col, vals = cond
         return f"{col} IN ({', '.join(_literal(v) for v in vals)})"
-    if typ == "between":
-        _, col, lo, hi = cond
-        return f"{col} BETWEEN {_literal(lo)} AND {_literal(hi)}"
-    if typ == "not":
-        _, sub = cond
-        return f"NOT ({_render(sub)})"
     if typ in ("and", "or"):
         _, subs = cond
         joiner = " AND " if typ == "and" else " OR "
@@ -25,7 +29,7 @@ def _render(cond):
     raise ValueError(f"unknown condition: {typ}")
 
 
-def build(cond):
+def build(cond, dialect=None):
     typ = cond[0]
     if typ == "eq":
         _, col, val = cond
