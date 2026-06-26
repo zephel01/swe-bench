@@ -101,7 +101,7 @@ def cmd_run(args) -> int:
         run = runner.run(
             args.model, only_tasks=only,
             runs=args.runs, sample_temp=args.sample_temp,
-            label=args.label,
+            label=args.label, concurrency=args.concurrency,
         )
     except ValueError as e:  # モデル解決失敗などは見やすく表示
         print(f"❌ {e}", file=sys.stderr)
@@ -207,6 +207,11 @@ def main() -> None:
                        help="Ollama接続先 (config未定義モデルの自動解決に使用)")
     p_run.add_argument("--label", default=None,
                        help="結果ラベルを明示指定 (既定: model:auto時はサーバ検出名)")
+    p_run.add_argument(
+        "--concurrency", type=int, default=None,
+        help="試行(runs)を同時実行する並列数 (既定: run.concurrency または1)。"
+             "llama.cpp を --parallel N -cb で起動した場合に有効",
+    )
     p_run.set_defaults(fn=cmd_run)
 
     p_cmp = sub.add_parser("compare", help="複数 results.json を横断比較")
