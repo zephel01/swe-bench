@@ -46,8 +46,8 @@ DEFAULT_GATES = {
     "L3": {"min_success": 0.75, "min_combined": 60.0},
     "L4": {"min_success": 0.60, "min_combined": 55.0},
     "L5": {"min_success": 0.40, "min_combined": 0.0},
-    # L6 (architect): 上位帯の分離用。Phase 3 較正後に数値確定 (暫定値)。
-    "L6": {"min_success": 0.55, "min_combined": 60.0},
+    # L6 (architect): Phase 3 較正で確定 (ornith 9B/35B ×5run, 2026-06-26)。
+    "L6": {"min_success": 0.60, "min_combined": 58.0},
 }
 
 # 到達レベルの解釈 (レポート用の一言)。
