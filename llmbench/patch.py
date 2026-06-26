@@ -26,6 +26,16 @@ CODE_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
+# harmony/channel系モデルの制御トークン (例: <|channel>, <channel|>, <|message|>)。
+# 「< と > の間にパイプ | を含むタグ」だけを除去する。通常のHTML/XMLタグ
+# (<li>, <ul>, <script> 等＝フロント系モデルがコード中に出す) はパイプを含まない
+# ので保持される。
+CONTROL_TOKEN_RE = re.compile(r"<\|[^<>]*>|<[^<>]*\|>")
+
+
+def _strip_control_tokens(text: str) -> str:
+    return CONTROL_TOKEN_RE.sub("", text)
+
 
 @dataclass
 class ParsedPatch:
@@ -46,6 +56,10 @@ def parse_llm_output(text: str, known_files: list[str]) -> ParsedPatch:
     if not text or not text.strip():
         patch.error = "empty output"
         return patch
+
+    # harmony/channel系モデル (例: <|channel>thought<channel|>) の制御トークンを
+    # 除去してから抽出する。これらが FILE マーカー行に前置されると抽出に失敗するため。
+    text = _strip_control_tokens(text)
 
     # 1. 正規形式: --- FILE: path --- の直後のコードブロック
     markers = list(FILE_MARKER_RE.finditer(text))
