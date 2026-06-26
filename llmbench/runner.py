@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -213,6 +214,7 @@ class BenchmarkRunner:
         runs: int | None = None,
         sample_temp: float | None = None,
         label: str | None = None,
+        concurrency: int | None = None,
     ) -> RunResult:
         client = create_client(model_name, self.resolve_model(model_name))
         reviewer = self._make_reviewer()
@@ -221,6 +223,10 @@ class BenchmarkRunner:
         retries = int(self.run_cfg.get("generate_retries", 1))
         runs = int(runs if runs is not None else self.run_cfg.get("runs", 1))
         runs = max(1, runs)
+        self._concurrency = max(1, int(
+            concurrency if concurrency is not None
+            else self.run_cfg.get("concurrency", 1)
+        ))
         # 複数試行時は多様性のためサンプリング温度を上げる
         if runs > 1:
             st = sample_temp if sample_temp is not None else self.run_cfg.get(
@@ -333,12 +339,20 @@ class BenchmarkRunner:
         issue = task.issue(lang)
         user_prompt = build_user_prompt(issue, task.read_buggy_files())
 
-        attempts = [
-            self._one_attempt(
+        def _attempt(_i):
+            return self._one_attempt(
                 client, reviewer, task, issue, user_prompt, timeout, retries
             )
-            for _ in range(runs)
-        ]
+
+        # 試行(runs)を並列実行する。LLM生成がボトルネックなので、サーバ側を
+        # `--parallel N -cb` で起動しておけば runs 本の生成が重なって時間短縮できる。
+        # MockClient は task_dir 状態を共有するため直列にフォールバックする。
+        conc = min(getattr(self, "_concurrency", 1), runs)
+        if conc > 1 and not isinstance(client, MockClient):
+            with ThreadPoolExecutor(max_workers=conc) as ex:
+                attempts = list(ex.map(_attempt, range(runs)))
+        else:
+            attempts = [_attempt(i) for i in range(runs)]
         _aggregate_attempts(tr, attempts, self.scoring_cfg)
         tr.usability_tier = usability.classify(
             tr.success_rate, tr.quality_score, self.usability_cfg
