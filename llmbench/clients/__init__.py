@@ -5,6 +5,7 @@ from .base import LLMClient
 from .openai_compat import OpenAICompatClient
 from .ollama import OllamaClient
 from .mock import MockClient
+from .multiagent import MultiAgentClient
 
 
 def create_client(name: str, cfg: dict) -> LLMClient:
@@ -16,4 +17,6 @@ def create_client(name: str, cfg: dict) -> LLMClient:
         return OllamaClient(name, cfg)
     if ctype == "mock":
         return MockClient(name, cfg)
+    if ctype == "multiagent":
+        return MultiAgentClient(name, cfg)
     raise ValueError(f"unknown client type: {ctype!r} (model={name})")
