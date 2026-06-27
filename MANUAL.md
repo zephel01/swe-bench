@@ -316,7 +316,7 @@ cat "results/$adir/t011/llm_output.txt"
 | `llmbench/report.py` | usability判定セクション・信頼性列・pass@1主指標・保守的な総合推奨・品質内訳注記 |
 | `llmbench/clients/openai_compat.py` | `model:auto` のサーバ検出（`fetch_served_model`）・APIキー環境変数展開 |
 | `llmbench/clients/ollama.py` | `list_ollama_models()`（`/api/tags`） |
-| `llmbench/cli.py` | `models` / `compare` / **`certify`** サブコマンド・`--runs`/`--sample-temp`/`--label`/`--ollama-host`・**`--with-l6`/`--l6-ledger`** |
+| `llmbench/cli.py` | `models` / `compare` / **`certify`** サブコマンド・`--runs`/`--sample-temp`/**`--concurrency`**/`--label`/`--ollama-host`・**`--with-l6`/`--l6-ledger`** |
 | `llmbench/certify.py` | **新規**。難易度→tier(L1-L6)、tier別gate判定（`certify`/`render_certificate_md`）。使えるライン=L4独立合格・**architect→L6 gate** |
 | `llmbench/tasks.py` | `Task.perf_timeout` フィールド・**`load_tasks(..., ledgers=[...])` で複数台帳マージ（id先勝ち）** |
 | `llmbench/runner.py` | per-task `perf_timeout` を採用（未指定時は `test_timeout`）・**`BenchmarkRunner(..., ledgers=...)`** |

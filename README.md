@@ -53,6 +53,7 @@ llmbench models
 llmbench run --model local-openai                 # 既定40タスク・1回
 llmbench run --model local-openai --runs 5        # 各タスク5回 → 成功率・pass@k
 llmbench run --model local-openai --with-l6 --runs 5  # L6(architect)20問を加えて計60タスク
+llmbench run --model local-openai --runs 5 --concurrency 5  # 試行を5並列で実行し総時間短縮(要: サーバを --parallel 5 -cb で起動)
 llmbench run --model qwen2.5-coder:7b --runs 5    # Ollamaの実モデル名を直接指定もOK
 llmbench run --model local-openai --tasks t021,t033 --lang ja   # 新tierだけ実行も可
 

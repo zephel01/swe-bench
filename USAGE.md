@@ -259,6 +259,33 @@ llmbench run --model local-openai --with-l6 \
 t051,t052,t053,t054,t055,t056,t057,t058,t059,t060            # L6だけ
 ```
 
+### 試行の並列実行（`--concurrency`）
+
+`--runs N` の各試行は既定では直列実行です。タスク数が多いと時間がかかるため、
+`--concurrency K` で試行を同時実行して総処理時間を短縮できます。
+
+**前提**: llama.cpp サーバを `--parallel K -cb` で起動しておくこと。
+サーバ側の `--parallel` とベンチ側の `--concurrency` は**同じ値に揃えます**。
+
+```bash
+# 並列計測: サーバ --parallel 5 で起動 → 試行を5並列
+llmbench run --model local-openai --runs 5 --concurrency 5
+llmbench run --model local-openai --with-l6 --runs 5 --concurrency 5   # 60タスク
+
+# 単発計測: サーバ --parallel 1 で起動 → 直列
+llmbench run --model local-openai --runs 5 --concurrency 1
+```
+
+**トレードオフ**:
+
+- ✅ 総終了時間は短縮（実測で約2.2倍速）。大量タスクの消化向き
+- ⚠️ 1ストリームあたりの tok/s は低下（実測 264→110 tok/s）。GPUを試行間で取り合うため
+- → **モデル単体の速度(tok/s)を正確に測るなら `--concurrency 1`**、量をこなすなら並列、と目的で使い分ける
+- 正答率・品質スコアは並列度の影響をほぼ受けません
+
+> 既定値は `config.yaml` の `run.concurrency`、または `--concurrency` で都度上書き。
+> 実際の並列数は `runs` を超えません（`min(concurrency, runs)`）。MockClient は常に直列です。
+
 ---
 
 ## 9. 出力の全体像

@@ -1,3 +1,17 @@
+# 🆕 `--concurrency`（試行の並列実行）— 総時間短縮オプション
+
+`--runs N` の各試行を同時実行する `--concurrency K`（既定1=直列）を追加。
+llama.cpp を `--parallel K -cb` で起動した場合に有効。`run.concurrency` でも既定値を設定可。
+
+| 追加 | 内容 |
+|---|---|
+| 🔀 `--concurrency K` / `run.concurrency` | 試行(runs)を `ThreadPoolExecutor` で並列化（`min(K, runs)`）。MockClient は直列フォールバック |
+
+**トレードオフ**: 総終了時間↓（実測 約2.2倍速）／1ストリーム tok/s↓（264→110）。
+正答率・品質は不変。速度計測は `--concurrency 1` 推奨。
+
+---
+
 # 🆕 L6 architect tier (t041–t060) — 任意オプション `--with-l6`
 
 frontier(L5)でも上位帯(27B〜35B級)が再び天井効果を起こすため、**さらに難しい
