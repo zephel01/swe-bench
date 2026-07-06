@@ -2,9 +2,43 @@
 
 from __future__ import annotations
 
+import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+
+
+def expand_env(value, where: str = ""):
+    """config値の ${VAR} / $VAR を環境変数から展開する.
+
+    未設定の環境変数を参照した場合は ValueError (無警告で空文字に
+    なって分かりにくい401等を起こさないため)。
+    プレースホルダでない値はそのまま返す。
+    """
+    if not isinstance(value, str):
+        return value
+    if value.startswith("${") and value.endswith("}"):
+        var = value[2:-1]
+    elif value.startswith("$") and len(value) > 1:
+        var = value[1:]
+    else:
+        return value
+    v = os.environ.get(var)
+    if not v:
+        hint = f" ({where})" if where else ""
+        raise ValueError(
+            f"環境変数 {var} が未設定です{hint}。"
+            f"export {var}=... してから再実行してください"
+        )
+    return v
+
+
+def require_cfg(cfg: dict, key: str, name: str, hint: str = ""):
+    """必須configキーの取得。欠落時はKeyErrorでなく分かりやすいValueError."""
+    if key not in cfg or cfg[key] in (None, ""):
+        extra = f" {hint}" if hint else ""
+        raise ValueError(f"models.{name} に {key} がありません。{extra}".rstrip())
+    return cfg[key]
 
 
 @dataclass
