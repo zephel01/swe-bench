@@ -144,6 +144,11 @@ llmbench run --model local-openai --tasks t001,t011 --lang ja
 
 # Ollamaの実モデル名を直接 / 出力先を変える
 llmbench run --model qwen2.5-coder:7b --runs 5 --output results/qwen7b
+
+# 接続先をCLIで直接指定 (config編集不要)
+llmbench run --model auto --client-type openai --base-url http://localhost:8085/v1   # llama.cpp直結
+llmbench run --model router --client-type multiagent --base-url http://localhost:8088 # CodeRouter
+llmbench run --model qwen2.5-coder:32b --base-url http://192.168.1.10:11434           # リモートOllama
 ```
 
 | オプション | 説明 |
@@ -155,6 +160,8 @@ llmbench run --model qwen2.5-coder:7b --runs 5 --output results/qwen7b
 | `--tasks` | カンマ区切りのタスクID（例: `t001,t003`）。省略で全タスク |
 | `--lang` | `en` / `ja`。configの `issue_lang` を上書き |
 | `--ollama-host` | Ollama接続先（未定義モデルの自動解決に使用） |
+| `--base-url` | 接続先URLを明示指定。configの `base_url` を上書き(例: `http://localhost:8085/v1`) |
+| `--client-type` | `openai` / `ollama` / `multiagent`。config未定義でも接続種別を直接指定(`--base-url` と併用) |
 | `--output` | 結果出力先ディレクトリ（既定: `results`） |
 | `--tasks-dir` / `--config` | タスク定義 / 設定ファイルの場所 |
 
