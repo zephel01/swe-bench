@@ -173,6 +173,7 @@ models:
     type: openai
     base_url: "http://localhost:8080/v1"
     model: "auto"          # auto = /v1/models のロード中モデルを自動採用 (config編集不要)
+    # auto_prefer: "qwen"  # 複数モデルロード時に部分一致で選択
   local-ollama:
     type: ollama
     base_url: "http://localhost:11434"
@@ -205,6 +206,32 @@ usability:                 # success_rate × quality でティア分類
 > ggufを差し替えるだけで、llmbench が `/v1/models` から実モデル名を取得し、レポート/ファイル名も
 > その実名でラベルします。Ollamaは `--model <インストール済み名>` を直接指定できます
 > (`llmbench models` で一覧)。固定したい時は `--label <名前>`。
+
+### 🔌 接続先の指定 (config編集なしで切替)
+
+`--base-url` / `--client-type` で接続先をCLIから直接指定できます:
+
+```bash
+# llama.cpp / vLLM / LM Studio に直結 (config不要)
+llmbench run --model auto --client-type openai --base-url http://localhost:8085/v1
+
+# CodeRouter (multiagent) に直結
+llmbench run --model router --client-type multiagent --base-url http://localhost:8088
+
+# リモートOllama (稼働モデル名をそのまま指定)
+llmbench run --model qwen2.5-coder:32b --base-url http://192.168.1.10:11434
+```
+
+接続先の優先順位:
+
+| 対象 | 優先順 (左が強い) |
+|---|---|
+| base_url | `--base-url` > config `base_url` (`${VAR}` 展開可) > 環境変数 (`OPENAI_BASE_URL` / `OLLAMA_HOST` / `CODEROUTER_BASE_URL`) > 型別デフォルト |
+| モデル名 | `--client-type` 直接指定 > config `models:` キー > Ollama稼働モデル自動解決 |
+| Ollamaホスト | `--ollama-host` > env `OLLAMA_HOST` > config ollamaモデルの `base_url` > `http://localhost:11434` |
+
+> [!NOTE]
+> `${VAR}` 参照の環境変数が未設定の場合は明確なエラーになります(空文字での分かりにくい401を防止)。
 
 ## 📁 プロジェクト構成
 
