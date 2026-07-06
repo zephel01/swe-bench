@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -16,7 +17,11 @@ from pathlib import Path
 from . import sandbox, usability
 from .clients import LLMClient, create_client
 from .clients.mock import MockClient
-from .clients.ollama import DEFAULT_OLLAMA_HOST, list_ollama_models
+from .clients.ollama import (
+    DEFAULT_OLLAMA_HOST,  # noqa: F401  (後方互換のため残置)
+    default_ollama_host,
+    list_ollama_models,
+)
 from .functional import evaluate_functional
 from .patch import parse_llm_output
 from .prompts import SYSTEM_PROMPT, build_user_prompt
@@ -150,14 +155,20 @@ class BenchmarkRunner:
         )
 
     def ollama_host(self) -> str:
-        """Ollama接続先: 明示設定 > configのollamaモデル > 既定."""
+        """Ollama接続先の優先順:
+        --ollama-host / run.ollama_host > env OLLAMA_HOST
+        > configのollamaモデル base_url > http://localhost:11434
+        """
         h = self.run_cfg.get("ollama_host")
         if h:
             return h
+        env = os.environ.get("OLLAMA_HOST")
+        if env:
+            return env
         for v in self.config.get("models", {}).values():
             if v.get("type") == "ollama" and v.get("base_url"):
                 return v["base_url"]
-        return DEFAULT_OLLAMA_HOST
+        return default_ollama_host()
 
     def _ollama_template(self) -> dict:
         """configにある最初のollamaモデルから共通パラメータを借用する."""
@@ -169,23 +180,52 @@ class BenchmarkRunner:
                 }
         return {}
 
-    def resolve_model(self, name: str) -> dict:
-        """モデル名をconfig、無ければOllamaの稼働モデルから解決する.
+    def resolve_model(
+        self,
+        name: str,
+        client_type: str | None = None,
+        base_url: str | None = None,
+    ) -> dict:
+        """モデル名を接続設定(dict)に解決する.
 
-        config未定義でもOllamaにインストール済みなら、その場でollama
-        クライアント設定を合成して返す。
+        優先順:
+          1. client_type 指定あり → config を経由せず ad-hoc に合成
+             (--client-type openai --base-url http://... で llama.cpp 直結、
+              --client-type multiagent で CodeRouter 直結など)
+          2. config の models: キーに一致 → その設定
+             (base_url 指定があれば上書き)
+          3. Ollama 稼働モデル名 → ollama 設定を自動合成
+             (base_url 指定があればそれを Ollama ホストとして使用)
         """
         models = self.config.get("models", {})
+        if client_type:
+            cfg = dict(models.get(name, {}))
+            cfg["type"] = client_type
+            if base_url:
+                cfg["base_url"] = base_url
+            if client_type == "ollama":
+                cfg.setdefault("base_url", base_url or self.ollama_host())
+                cfg = {**self._ollama_template(), **cfg}
+            if name not in models:
+                # openai型で名前がconfig未定義なら auto 扱い
+                # (auto/実モデル名どちらでも可)
+                cfg.setdefault("model", name)
+            return cfg
         if name in models:
-            return models[name]
-        host = self.ollama_host()
+            cfg = dict(models[name])
+            if base_url:
+                cfg["base_url"] = base_url
+            return cfg
+        host = base_url or self.ollama_host()
         try:
             available = list_ollama_models(host)
         except Exception as e:  # Ollama未起動など
             raise ValueError(
                 f"モデル {name!r} はconfig未定義で、"
                 f"Ollama ({host}) にも接続できません: {e}\n"
-                f"  config定義: {list(models)}"
+                f"  config定義: {list(models)}\n"
+                f"  (Ollama以外に繋ぐ場合は --client-type openai|multiagent "
+                f"と --base-url を指定)"
             ) from e
         if name in available:
             return {**self._ollama_template(), "type": "ollama",
@@ -201,10 +241,17 @@ class BenchmarkRunner:
         if not cfg.get("enabled", False):
             return None
         name = cfg.get("reviewer_model")
-        models = self.config.get("models", {})
-        if name not in models:
-            raise ValueError(f"reviewer_model {name!r} not in models config")
-        return create_client(name, models[name])
+        if not name:
+            raise ValueError(
+                "quality.llm_review.enabled ですが reviewer_model が未指定です"
+            )
+        try:
+            # メインモデルと同じ解決経路 (config > Ollama自動解決)
+            return create_client(name, self.resolve_model(name))
+        except ValueError as e:
+            raise ValueError(
+                f"reviewer_model {name!r} を解決できません: {e}"
+            ) from e
 
     def run(
         self,
@@ -215,8 +262,15 @@ class BenchmarkRunner:
         sample_temp: float | None = None,
         label: str | None = None,
         concurrency: int | None = None,
+        client_type: str | None = None,
+        base_url: str | None = None,
     ) -> RunResult:
-        client = create_client(model_name, self.resolve_model(model_name))
+        client = create_client(
+            model_name,
+            self.resolve_model(
+                model_name, client_type=client_type, base_url=base_url
+            ),
+        )
         reviewer = self._make_reviewer()
         lang = self.run_cfg.get("issue_lang", "en")
         timeout = int(self.run_cfg.get("test_timeout", 120))

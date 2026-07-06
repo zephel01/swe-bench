@@ -3,28 +3,24 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import requests
 
-from .base import GenerationResult, LLMClient
+from .base import GenerationResult, LLMClient, expand_env
 
-
-def _expand_env(value: str) -> str:
-    """${VAR} / $VAR を環境変数から展開する (APIキーをconfigに直書きしないため)."""
-    if not isinstance(value, str):
-        return value
-    if value.startswith("${") and value.endswith("}"):
-        return os.environ.get(value[2:-1], "")
-    if value.startswith("$"):
-        return os.environ.get(value[1:], "")
-    return value
+# 後方互換: 旧APIを参照しているコード向けエイリアス (未設定時の挙動は
+# 「空文字を返す」から「ValueError」に変更されている点に注意)
+_expand_env = expand_env
 
 
 def fetch_served_model(base_url: str, api_key: str | None = None,
-                       timeout: float = 5.0) -> str:
+                       timeout: float = 5.0, prefer: str | None = None) -> str:
     """サーバが現在ロードしているモデル名を /v1/models から取得する.
 
     base_url は .../v1 を含む前提 (例 http://localhost:8085/v1)。
+    prefer に部分文字列を渡すと、複数モデルロード時にそれを含む
+    最初のモデルを優先採用する (大文字小文字は無視)。
     """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     resp = requests.get(
@@ -34,21 +30,49 @@ def fetch_served_model(base_url: str, api_key: str | None = None,
     items = resp.json().get("data") or []
     if not items:
         raise RuntimeError("サーバがモデルを返しませんでした (/v1/models が空)")
-    return items[0].get("id") or items[0].get("model") or ""
+    names = [it.get("id") or it.get("model") or "" for it in items]
+    if prefer:
+        for n in names:
+            if prefer.lower() in n.lower():
+                return n
+        raise RuntimeError(
+            f"auto_prefer={prefer!r} に一致するモデルがありません。"
+            f"ロード中: {names}"
+        )
+    if len(names) > 1:
+        print(
+            f"⚠️ 複数モデルがロード中 {names} → 先頭 {names[0]!r} を採用します"
+            " (auto_prefer で選択可能)",
+            file=sys.stderr,
+        )
+    return names[0]
 
 
 class OpenAICompatClient(LLMClient):
     def __init__(self, name: str, cfg: dict):
         super().__init__(name, cfg)
-        self.base_url = cfg["base_url"].rstrip("/")
-        self.api_key = _expand_env(cfg.get("api_key", "sk-local"))
+        # base_url: config (${VAR}展開) > 環境変数 OPENAI_BASE_URL
+        raw_url = cfg.get("base_url") or os.environ.get("OPENAI_BASE_URL", "")
+        raw_url = expand_env(raw_url, where=f"models.{name}.base_url")
+        if not raw_url:
+            raise ValueError(
+                f"models.{name} に base_url がありません "
+                "(config で指定するか OPENAI_BASE_URL を設定してください)"
+            )
+        self.base_url = str(raw_url).rstrip("/")
+        self.api_key = expand_env(
+            cfg.get("api_key", "sk-local"), where=f"models.{name}.api_key"
+        )
         # model: auto / 空 のときはサーバのロード中モデルを自動採用する
-        raw_model = (_expand_env(cfg.get("model", "")) or "").strip()
+        raw_model = (
+            expand_env(cfg.get("model", ""), where=f"models.{name}.model") or ""
+        ).strip()
         self.served_model_name: str | None = None
         if raw_model.lower() in ("", "auto"):
             try:
                 self.served_model_name = fetch_served_model(
-                    self.base_url, self.api_key
+                    self.base_url, self.api_key,
+                    prefer=cfg.get("auto_prefer"),
                 )
             except Exception as e:
                 raise ValueError(

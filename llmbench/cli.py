@@ -102,6 +102,7 @@ def cmd_run(args) -> int:
             args.model, only_tasks=only,
             runs=args.runs, sample_temp=args.sample_temp,
             label=args.label, concurrency=args.concurrency,
+            client_type=args.client_type, base_url=args.base_url,
         )
     except ValueError as e:  # モデル解決失敗などは見やすく表示
         print(f"❌ {e}", file=sys.stderr)
@@ -205,6 +206,18 @@ def main() -> None:
     )
     p_run.add_argument("--ollama-host", default=None, dest="ollama_host",
                        help="Ollama接続先 (config未定義モデルの自動解決に使用)")
+    p_run.add_argument(
+        "--base-url", default=None, dest="base_url",
+        help="接続先URLを明示指定 (configのbase_urlを上書き。"
+             "例: http://localhost:8085/v1)",
+    )
+    p_run.add_argument(
+        "--client-type", default=None, dest="client_type",
+        choices=["openai", "ollama", "multiagent"],
+        help="config未定義でも接続種別を直接指定 "
+             "(openai=llama.cpp/vLLM等, ollama, multiagent=CodeRouter)。"
+             "--base-url と併用",
+    )
     p_run.add_argument("--label", default=None,
                        help="結果ラベルを明示指定 (既定: model:auto時はサーバ検出名)")
     p_run.add_argument(

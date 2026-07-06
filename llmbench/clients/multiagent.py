@@ -27,12 +27,13 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import time
 import urllib.error
 import urllib.request
 
-from .base import GenerationResult, LLMClient
+from .base import GenerationResult, LLMClient, expand_env
 
 _CODE_BLOCK_RE = re.compile(r"```(?:python|py)?[^\n]*\n(.*?)```", re.DOTALL)
 
@@ -61,7 +62,10 @@ class MultiAgentClient(LLMClient):
 
     def __init__(self, name: str, cfg: dict):
         super().__init__(name, cfg)
-        base = str(cfg.get("base_url", "http://localhost:8088/v1")).rstrip("/")
+        raw = cfg.get("base_url") or os.environ.get(
+            "CODEROUTER_BASE_URL", "http://localhost:8088/v1"
+        )
+        base = str(expand_env(raw, where=f"models.{name}.base_url")).rstrip("/")
         if not base.endswith("/v1"):
             base += "/v1"
         self.endpoint = base + "/chat/completions"

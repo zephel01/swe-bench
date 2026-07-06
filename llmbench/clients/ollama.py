@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import os
+
 import requests
 
-from .base import GenerationResult, LLMClient
+from .base import GenerationResult, LLMClient, expand_env, require_cfg
 
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+
+
+def default_ollama_host() -> str:
+    """Ollama既定ホスト: 環境変数 OLLAMA_HOST > localhost:11434."""
+    return os.environ.get("OLLAMA_HOST") or DEFAULT_OLLAMA_HOST
 
 
 def list_ollama_models(
@@ -26,8 +33,12 @@ def list_ollama_models(
 class OllamaClient(LLMClient):
     def __init__(self, name: str, cfg: dict):
         super().__init__(name, cfg)
-        self.base_url = cfg.get("base_url", "http://localhost:11434").rstrip("/")
-        self.model = cfg["model"]
+        raw_url = cfg.get("base_url") or default_ollama_host()
+        raw_url = expand_env(raw_url, where=f"models.{name}.base_url")
+        self.base_url = str(raw_url).rstrip("/")
+        self.model = require_cfg(
+            cfg, "model", name, hint="(例: model: qwen2.5-coder:32b)"
+        )
 
     def _generate(self, system: str, user: str) -> GenerationResult:
         resp = requests.post(
