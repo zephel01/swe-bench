@@ -1,3 +1,24 @@
+# 🆕 L7 grandmaster tier (t061–t100) — 任意オプション `--with-l7`
+
+L6 architect でも上位帯(27B dense)がほぼ踏破し（最上位2モデル差=実質1問、生きた弁別
+タスクは t059/t047/t046/t043 の4問程度）、再び天井効果が発生。**天井評価用の40問
+(L7 grandmaster)** を追加しました。**既定の挙動は不変**（従来どおり40問、`--with-l6`
+で60問）で、`--with-l7` を付けたときだけ +40 されます。
+
+| 追加 | 内容 |
+|---|---|
+| 🏔️ L7 grandmaster (t061–t100, 40問) | 5軸×8問: 数値安定性(t061-068) / 状態一貫性(t069-076) / 複数結合バグ(t077-084) / 深い並行性(t085-092) / 敵対的パース・セキュリティ(t093-100)。issueは症状のみ |
+| 🔀 `--with-l7` / `--l7-ledger` | 別台帳 `tasks/tasks_l7.jsonl` を任意マージ（既定40 → 80、`--with-l6`併用で100）。既存台帳は不変 |
+| 🕵️ 隠密性基準（新） | 全40問で buggy が `test_core`（回帰罠）を通過＝lintや正常系では見えないバグのみ |
+| 🎓 certify L7 gate | `grandmaster→L7`、暫定 pass@1 ≥ 35% かつ combined ≥ 55（実モデル較正で確定） |
+
+**検証**: L7 selfcheck 40/40（gold緑/buggy赤/隠密性✓/ruff0）、軸Cは部分修正の不合格性、
+軸Dは gold 10回連続緑・buggy 10/10失敗の決定性を確認。`validate --with-l7`
+gold 40/40・broken 40/40、`list-tasks` 40（既定）/ 80（`--with-l7`）/ 100（`--with-l6 --with-l7`）。
+t098 のみ `perf_timeout: 30`（ReDoS性能検証）。
+
+---
+
 # 🆕 `--concurrency`（試行の並列実行）— 総時間短縮オプション
 
 `--runs N` の各試行を同時実行する `--concurrency K`（既定1=直列）を追加。
