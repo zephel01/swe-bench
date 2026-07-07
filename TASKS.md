@@ -1,4 +1,4 @@
-# 🧩 タスク仕様書 — t001〜t040 (+ L6 architect t041〜t060)
+# 🧩 タスク仕様書 — t001〜t040 (+ L6 architect t041〜t060 / L7 grandmaster t061〜t100)
 
 各タスクが**何を調査しているか**(LLMのどの能力を測るか)と**採点基準**の一覧。
 
@@ -250,6 +250,103 @@
 
 ---
 
+## L7 grandmaster (t061〜t100) — 任意オプション `--with-l7`
+
+L1〜L6 の60問が最上位帯 (27B dense級) にほぼ踏破され、**最上位2モデルの差が実質1問**まで
+縮小した (L6較正で天井効果が再発)。これを解消するための**追加40問**。既定の40問評価にも
+`--with-l6` にも含まれず、別台帳 `tasks/tasks_l7.jsonl` に置かれ `--with-l7` 指定時のみ評価
+される (`--with-l6` と独立に併用可。`difficulty=grandmaster` → certify では **L7**)。位置づけは
+「使えるラインの判定」ではなく、現行モデル群の**頭打ちを検出する天井評価帯**。
+
+**5軸 × 8問** で構成し、それぞれ *異なる失敗様式* を突く。全問 stdlib-only・issueは症状のみ
+(原因と修正範囲はモデルに委ねる)・`test_core.py`(回帰罠) と `test_bug.py`(バグ捕捉) を持つ。
+**隠密性基準** (buggy が `test_core` の回帰罠を必ず通過する＝一見正しく見えるバグのみ許容) を
+grandmaster tier の必須要件として機械強制。t098 のみ `perf_timeout: 30`。gate は暫定
+**pass@1 ≥ 0.35 かつ combined ≥ 55** (実モデル較正で確定、現時点は未較正)。
+
+### 軸A 数値安定性 (t061〜t068) — 読んでも一見正しい数値解析の失敗
+
+| ID | モジュール | 仕込んだバグ | 主に測る力 |
+|---|---|---|---|
+| t061 welford_variance | spread.py | 一括 `E[x²]−E[x]²` が大オフセット(1e9)で桁落ちし分散が0に。Welford/二段平均が要る | 分散の条件数・数値的安定性 |
+| t062 logsumexp | logsumexp.py | `log(sum(exp(x)))` が x=1000 でoverflow・x=−1000 でlog(0)。max-shift恒等式が要る | 桁あふれ回避 (log-sum-exp) |
+| t063 quadratic_roots | roots.py | `(−b±√D)/2a` は \|b\| 支配時に小根が桁落ちで消失。符号安定形が要る | 桁落ち(cancellation)回避 |
+| t064 money_allocate | allocate.py | 比例配分を各自独立に丸め→合計が総額に一致しない(100を3分割で99)。最大剰余法(整数配分) | 丸め規約と総和保存 |
+| t065 ema_bias | smoothing.py | ゼロ初期化EMAが空履歴を実サンプル0扱い→初期出力が0側にバイアス。adjust=True加重平均 | 初期化バイアスの認識 |
+| t066 recurrence | recurrence.py | 前進漸化式 `E_n=1−n·E_{n−1}` が丸め誤差を n! 倍増幅→n≈20で巨大負値。Miller後退漸化式 | 漸化式の数値安定性 |
+| t067 geometric_mean | geomean.py | 積を作ってから n乗根→inf/0 にover/underflow。log域 `exp(mean(log x))` | 対数域変換 |
+| t068 haversine | geo.py | 球面余弦 `acos` が引数1近傍で精度全損→近接点が距離0(域外例外も)。半角(haversine)+atan2 | 近傍条件数・公式選択 |
+
+### 軸B 状態一貫性 (t069〜t076) — 長い操作列と部分失敗で崩れる不変条件
+
+| ID | 構成 | 仕込んだバグ | 主に測る力 |
+|---|---|---|---|
+| t069 saga_compensation | resources.py + saga.py | 補償の失敗を隔離せず伝播→逆順の先行ステップ解放を飛ばし原因誤差も隠す。回復経路も耐障害に | saga補償の部分失敗耐性 |
+| t070 nested_txn_kv | store.py | ネストtxのcommitが子のundoログを親へ継がず→後の親rollbackで子が入れたキーを戻せない | ネストTx savepoint・undo継承 |
+| t071 wal_replay | wal.py + recover.py | 単一パス回復が任意commitで全pendingをflush→未commitの割り込みtxが適用され後続は破棄 | WALリプレイの整合(交錯tx) |
+| t072 undo_redo | commands.py + history.py | 単一コマンドapplyが `redo.clear()` 漏れ→undo後の編集でredo枝が生存し復活 | 線形履歴の枝切り(undo-redo分岐) |
+| t073 inventory_reservation | inventory.py | confirm が active判定を落とし失効済み予約を確定→reserved二重減算(負値)・幻の在庫控除 | 予約期限×確定の不変条件 |
+| t074 reorder_buffer | envelope.py + processor.py | `seq≥next` を並べて適用しギャップを飛ばす→遅れて来たseqが「過去」で破棄(順序違反) | 順序再構築(連続prefix) |
+| t075 state_machine | transitions.py + machine.py | 副作用の前に状態/履歴を進める→副作用失敗で状態だけ前進し不正な後続遷移を許す | 前進遷移の部分失敗補償 |
+| t076 optimistic_lock | store.py | `commit_all` が検証と適用を同一ループ→後のキー衝突で先行キーは適用・版上げ済み(非原子) | 複数キーCASの全か無か |
+
+### 軸C 複数結合バグ (t077〜t084) — 各2バグを別ファイルに分散、部分修正は不合格
+
+各タスクは *異なる能力軸* の独立バグを2個内包し、`test_bug` が各バグと1対1の直交テストを持つ。
+**buggy の `.py` を1つだけ gold へ差し替えた中間版でも必ず `test_bug` が赤**になる (=片方修正では
+通らない)。`scripts/verify_axis_c.py` がファイル差し替えを総当たりで自動検証済み。
+
+| ID | 構成 | 仕込んだバグ (2件) | 主に測る力 |
+|---|---|---|---|
+| t077 job_scheduler | ordering.py + nextrun.py | ①同優先度タイブレークをLIFOにして投入と逆順 ②日次時刻をローカルtz変換せずUTCのまま→壁時計・日付ずれ | 順序安定性 + タイムゾーン日付 |
+| t078 pagination | query.py + order.py | ①`filter→sort→slice` を `sort→slice→filter` 順にして行欠落 ②降順後の `reverse()` で同値タイ反転(安定崩れ) | フィルタ×オフセット順序 + 安定ソート |
+| t079 serializer | encode.py + decode.py | ①区切り `\|` のエスケープ漏れで値が破損 ②bool復元を `bool(value)` にして `"False"` が True 化 | エスケープ漏れ + 型復元 |
+| t080 cellref | colref.py + rangeexp.py | ①base26全単射で `divmod(n,26)` の1ずれ ②矩形展開が排他境界で最終行・最終列を落とす | 全単射変換 + 範囲展開境界 |
+| t081 table_formatter | widths.py + render.py | ①列幅をヘッダ抜き(データ行のみ)で算出し最幅列で桁ずれ ②行を `rstrip()` せず末尾空白が残る | 列幅計算 + 整列(末尾空白) |
+| t082 diffpatch | hunks.py + textio.py | ①下側コンテキスト窓を1行取りこぼす ②`splitlines()` で末尾改行情報を喪失 | コンテキスト境界 + 末尾改行 |
+| t083 aggregate | groupby.py + stats.py | ①複合キーを文字列連結にして異なる組が衝突・併合 ②平均を整数除算 `//` で切り捨て | グループ化キー衝突 + 平均切り捨て |
+| t084 cidr | mask.py + contains.py | ①ブロードキャストを `+2^host`(1つ先) ②所属判定を `<` にして端点(network/broadcast)を除外 | ネットマスク1ずれ + 所属境界 |
+
+### 軸D 深い並行性 (t085〜t092) — 計装ゲートで決定的に捕捉する複合並行バグ
+
+単発の並行タスク(t050/t051/t052)を超えた複合並行バグ。確率でなく**決定的**に捕捉するため、
+テスト側でロック/フラグ/Conditionを計装オブジェクトへ差し替えインターリーブを強制する
+(gold は決してハングしない)。全問 buggy 10/10 失敗・gold 10/10 緑を実測済み。
+
+| ID | テーマ | 仕込んだバグ | 主に測る力 |
+|---|---|---|---|
+| t085 lock_order | 送金 | `src→dst` 固定アドレス順取得→逆向き送金2本がAB/BAでデッドロック。id順(min→max)取得で循環排除 | ロック順序デッドロック |
+| t086 lost_wakeup | 有界バッファ | 空判定を `while` でなく `if`→`notify_all` 横取り起床で2人目が空 `pop` の IndexError。再検査で再眠 | lost wakeup(条件再検査) |
+| t087 dcl_init | 遅延シングルトン | None判定→生成をロックなし→並行初回で factory 二重実行。ロック後の二重チェック(DCL) | ダブルチェックロッキング |
+| t088 cancel_leak | asyncio runner | 解放を `except Exception` のみ→`CancelledError`(BaseException)漏れで in_use/active リーク。try/finally | asyncキャンセル時の資源解放 |
+| t089 toctou_pool | 資源プール | `_free[0]` の peek から remove まで無ロック→2スレッドが同一idを二重確保/ValueError。全体をロック | TOCTOU二重確保 |
+| t090 future_double_set | 単一代入セル | `_done` 判定後の代入が無ロック→並行で両者が勝者(単一代入契約違反)。ロック内で判定+代入 | Future二重設定 |
+| t091 gather_leak | asyncio.gather | gather のみで例外時に兄弟タスクを cancel せず走り続けリーク。finally で残タスク cancel | gather残タスクの後始末 |
+| t092 rw_reentrant | reader-writerロック | writer待機中に同スレッドが再入readで書込優先ブロック→自分待ちデッドロック。スレッド毎read保持追跡で非ブロック再入 | reader-writer再入 |
+
+### 軸E 敵対的パース・セキュリティ文脈・Unicode正規化 (t093〜t100)
+
+L6 の t053/t057/t060 を深掘り。敵対入力下で不変条件(ディレクトリ内・単一ヘッダ行・単一script・
+単一クエリ値・素のフィールド置換)を保ちつつ、危険に*見えるだけ*の正当入力を過剰拒否しない
+**防御実装**を要求。共通の罠は演算順序(検査の前にデコード/正規化するか)と正規化回数。
+
+| ID | 関数 | 仕込んだバグ | 主に測る力 |
+|---|---|---|---|
+| t093 path_canon | resolve_subpath | `..` 検査を完全デコード前に行い素の前置一致→二重エンコード・バックスラッシュ・全角traversal通過。NFKC→反復%デコード→`\`畳み→`base+sep` 前置要求 | 多層デコード後の封じ込め |
+| t094 header_crlf | sanitize_header_value | CR/LFのみ拒否→`splitlines` が割る VT/FF/NEL(U+0085)/LS(U+2028)/PS(U+2029) 等を見逃す。改行集合全体+C0/DEL拒否(HTABは許可) | Unicode改行の網羅 |
+| t095 confusable_label | is_allowed_label | 小さなキリル黒名簿で検知漏れ(ギリシャ等)かつ純キリルを過剰拒否。NFKC→字ごとにscript判定し非中立scriptを1つまで許可 | confusables/混在script |
+| t096 nested_escape | render_search_link | href をHTMLエスケープのみでURL意味文字が生存(URLクエリ×HTML属性の入れ子)。内側%エンコード→外側HTML属性エスケープ(順序重要) | ネスト文脈エスケープ |
+| t097 querystring | parse_query | 重複キー上書き+`%20` のみ対応で `+`→空白・一般%デコード欠落。`unquote_plus` で復号し重複を list 集積 | クエリRFC(+/%/重複) |
+| t098 redos_path | is_valid_label_path | `^(\w+\.?)+$` の入れ子で指数バックトラック+末尾ドット許容。`^\w+(?:\.\w+)*$` で線形化。`perf_timeout:30`・28字+`!` を<1sで False | ReDoS(曖昧正規表現) |
+| t099 tar_slip | safe_member_path | `normpath+startswith`(区切りなし)で prefix共有の兄弟通過・POSIXで `\` 生存。`\`畳み・絶対/ドライブ拒否・`dest+sep` 前置要求(FSアクセスなし) | tar-slip(アーカイブ脱出) |
+| t100 format_inject | safe_format | `str.format` 直呼びで `{x.__class__…__globals__}`/`{obj[key]}` に到達。`Formatter().parse` で `.`/`[`/ネストフィールドを拒否 | format文字列注入 |
+
+> 検証: `python3 _OUTPUTS/llm-bench-l7/scripts/selfcheck_l7.py`(gold緑/buggy赤/隠密性/ruff0 の
+> 40/40 PASS)、`llmbench validate --with-l7`(mock-gold 40/40・mock-broken 40/40)、既存テスト23 passed。
+> 各問のバグ本質は `tasks/tasks_l7.jsonl` と `_OUTPUTS/llm-bench-l7/design/axis_*.md` に対応。
+
+---
+
 ## 設計意図のまとめ
 
 | 観点 | 対応タスク |
@@ -258,14 +355,19 @@
 | 言語特有の罠 | t003 (mutable default), t011 (OrderedDict), t014 (heapq) |
 | 仕様文からの実装補完 | t004, t007, t010, t015 |
 | エッジケース設計 | t005, t001(n=0), t004(空), t007(記号のみ) |
-| 複数ファイルのバグ局所化 + 無関係コード不変更 | t012, t014, t015, t033-t040, t041-t048 |
+| 複数ファイルのバグ局所化 + 無関係コード不変更 | t012, t014, t015, t033-t040, t041-t048, t069-t084 |
 | 明示的制約の遵守 | t014 (FIFO維持), t015 (非破壊) |
-| regression検出 (隠しテストが本体も再検証) | t008, t011, t012, t013, t033-t060 (test_core) |
+| regression検出 (隠しテストが本体も再検証) | t008, t011, t012, t013, t033-t060 (test_core), t061-t100 (隠密性=test_core) |
 | 仕様の細部理解・アルゴリズム正確性 | t021-t032 (expert) |
-| 症状からの原因診断 (issueに修正手順なし) | t021-t060 |
-| 複数の結合バグ (片方修正では通らない) | t035, t037, t039, t040 |
-| 性能制約 (perf_timeout) | t039, t040, t045, t049-t052, t059 |
+| 症状からの原因診断 (issueに修正手順なし) | t021-t100 |
+| 複数の結合バグ (片方修正では通らない) | t035, t037, t039, t040, t077-t084 (各2バグ) |
+| 性能制約 (perf_timeout) | t039, t040, t045, t049-t052, t059, t098 |
 | リポジトリ規模の診断・設計判断 (architect) | t041-t060 (--with-l6) |
 | 曖昧仕様からの意図抽出 / 敵対入力・数値安定性 | t055-t058 / t053, t059, t060 |
+| 数値解析の失敗様式 (桁落ち・overflow・条件数) | t061-t068 (L7軸A) |
+| 長い操作列・部分失敗での状態不変条件 | t069-t076 (L7軸B) |
+| 決定的に捕捉する複合並行性 (デッドロック/競合/リーク) | t085-t092 (L7軸D) |
+| 敵対的パース・セキュリティ文脈・Unicode正規化 | t093-t100 (L7軸E) |
+| 天井評価帯 (grandmaster・現行モデル群の頭打ち検出) | t061-t100 (--with-l7) |
 
 難易度が上がるほど「テストを通す」だけでなく「**正しい箇所だけを最小限に直す**」判断が要求され、機能スコアと品質スコアの乖離が観測しやすい構成になっている。
