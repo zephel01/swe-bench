@@ -63,7 +63,7 @@ def _usability_section(run) -> list[str]:
         )
     # 難易度×ティア マトリクス
     lines += ["", "| 難易度 | 🟢 自律 | 🟡 補助 | 🔴 不可 |", "|---|---|---|---|"]
-    for diff in ("easy", "medium", "hard"):
+    for diff in ("easy", "medium", "hard", "expert", "frontier", "architect", "grandmaster"):
         if diff not in by_diff:
             continue
         c = by_diff[diff]
@@ -77,7 +77,7 @@ def _usability_section(run) -> list[str]:
         return c.get(key, 0) / tot * 100
 
     lines += ["", "**難易度別の内訳（割合）**", ""]
-    for diff in ("easy", "medium", "hard"):
+    for diff in ("easy", "medium", "hard", "expert", "frontier", "architect", "grandmaster"):
         if diff not in by_diff:
             continue
         c = by_diff[diff]
@@ -181,7 +181,7 @@ def render_markdown(run) -> str:
     # 難易度別集計
     lines += ["", "## 難易度別", "",
               "| 難易度 | Resolved | 品質平均 |", "|---|---|---|"]
-    for diff in ("easy", "medium", "hard"):
+    for diff in ("easy", "medium", "hard", "expert", "frontier", "architect", "grandmaster"):
         rs = [r for r in run.results if r.difficulty == diff]
         if not rs:
             continue

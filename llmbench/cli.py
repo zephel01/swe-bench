@@ -42,12 +42,23 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
         "--l6-ledger", default="tasks_l6.jsonl", dest="l6_ledger",
         help="L6 追加台帳のファイル名 (tasks-dir 内。既定: tasks_l6.jsonl)",
     )
+    parser.add_argument(
+        "--with-l7", action="store_true", dest="with_l7",
+        help="既定40問(+L6)に加えて L7 (grandmaster tier) の追加40問を含める",
+    )
+    parser.add_argument(
+        "--l7-ledger", default="tasks_l7.jsonl", dest="l7_ledger",
+        help="L7 追加台帳のファイル名 (tasks-dir 内。既定: tasks_l7.jsonl)",
+    )
 
 
 def _ledgers(args) -> list[str]:
+    ledgers = ["tasks.jsonl"]
     if getattr(args, "with_l6", False):
-        return ["tasks.jsonl", args.l6_ledger]
-    return ["tasks.jsonl"]
+        ledgers.append(args.l6_ledger)
+    if getattr(args, "with_l7", False):
+        ledgers.append(args.l7_ledger)
+    return ledgers
 
 
 def cmd_list_tasks(args) -> int:

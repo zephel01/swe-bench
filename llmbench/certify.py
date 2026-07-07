@@ -1,6 +1,6 @@
 """tier合格制による「使えるライン」判定.
 
-results.json (runner出力) を読み、難易度を tier(L1-L5) にマップして、
+results.json (runner出力) を読み、難易度を tier(L1-L7) にマップして、
 tierごとの平均成功率・平均combinedが gate を満たすかを **累積** で評価する。
 モデルの到達レベル (= gateを満たした最上位tier) を返す。
 
@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-# 難易度 -> tier。既存の easy/medium/hard と新規 expert/frontier を対応づける。
+# 難易度 -> tier。既存の easy/medium/hard と新規 expert/frontier/architect/grandmaster を対応づける。
 DIFFICULTY_TO_TIER = {
     "easy": "L1",
     "medium": "L2",
@@ -25,9 +25,10 @@ DIFFICULTY_TO_TIER = {
     "expert": "L4",
     "frontier": "L5",
     "architect": "L6",
+    "grandmaster": "L7",
 }
 
-TIER_ORDER = ["L1", "L2", "L3", "L4", "L5", "L6"]
+TIER_ORDER = ["L1", "L2", "L3", "L4", "L5", "L6", "L7"]
 
 TIER_LABEL = {
     "L1": "L1 easy",
@@ -36,6 +37,7 @@ TIER_LABEL = {
     "L4": "L4 expert (使えるライン)",
     "L5": "L5 frontier",
     "L6": "L6 architect",
+    "L7": "L7 grandmaster (天井評価)",
 }
 
 # gate: そのtierのタスク平均が満たすべき下限。
@@ -48,6 +50,9 @@ DEFAULT_GATES = {
     "L5": {"min_success": 0.40, "min_combined": 0.0},
     # L6 (architect): Phase 3 較正で確定 (ornith 9B/35B ×5run, 2026-06-26)。
     "L6": {"min_success": 0.60, "min_combined": 58.0},
+    # L7 (grandmaster): 暫定値。天井評価用 (t061-t100)。
+    # 実モデル較正 (フロンティア級モデル ×5run 想定) で確定するまでの仮ゲート。
+    "L7": {"min_success": 0.35, "min_combined": 55.0},
 }
 
 # 到達レベルの解釈 (レポート用の一言)。
@@ -59,6 +64,7 @@ LEVEL_VERDICT = {
     "L4": "✅ 使えるライン到達。監督付きで実務投入できる。",
     "L5": "フロンティア級。複雑案件も補助付きで任せられる。",
     "L6": "アーキテクト級。リポジトリ規模の診断・設計判断まで任せられる。",
+    "L7": "グランドマスター級。天井評価帯まで到達 — 現行タスク群では頭打ちが見えない水準。",
 }
 
 
@@ -189,6 +195,7 @@ def render_certificate_md(cert: dict, model: str = "") -> str:
     lines.append(
         "\n> **使えるライン = L4 を独立に合格** (下位tierの取りこぼしに左右されない)。"
         " 累積到達レベルは『下位から連続して合格した最上位』で、一貫性の参考指標。"
+        " L7(grandmaster)は天井評価帯 — gateは暫定値であり、実モデル較正で確定する。"
     )
     return "\n".join(lines)
 
