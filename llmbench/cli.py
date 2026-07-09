@@ -50,13 +50,36 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
         "--l7-ledger", default="tasks_l7.jsonl", dest="l7_ledger",
         help="L7 追加台帳のファイル名 (tasks-dir 内。既定: tasks_l7.jsonl)",
     )
+    parser.add_argument(
+        "--only-l6", action="store_true", dest="only_l6",
+        help="既定40問を除外し L6 (architect) の追加台帳だけを実行する",
+    )
+    parser.add_argument(
+        "--only-l7", action="store_true", dest="only_l7",
+        help="既定40問を除外し L7 (grandmaster) の追加台帳だけを実行する",
+    )
 
 
 def _ledgers(args) -> list[str]:
-    ledgers = ["tasks.jsonl"]
-    if getattr(args, "with_l6", False):
+    """実行対象の台帳リストを決める.
+
+    優先規則:
+      - `--only-l6` / `--only-l7` のいずれかが指定されたら「only モード」。
+        既定台帳 tasks.jsonl を除外し、要求された tier 台帳だけを対象にする。
+      - only モードでも `--with-l6`/`--with-l7` は同 tier の追加要求として尊重する
+        (実質 `--only-l6` と `--with-l6` は同義。両立しても二重追加しない)。
+      - only フラグが一切無ければ従来どおり tasks.jsonl を基点に上乗せ。
+    """
+    only_l6 = getattr(args, "only_l6", False)
+    only_l7 = getattr(args, "only_l7", False)
+    with_l6 = getattr(args, "with_l6", False)
+    with_l7 = getattr(args, "with_l7", False)
+
+    only_mode = only_l6 or only_l7
+    ledgers = [] if only_mode else ["tasks.jsonl"]
+    if only_l6 or with_l6:
         ledgers.append(args.l6_ledger)
-    if getattr(args, "with_l7", False):
+    if only_l7 or with_l7:
         ledgers.append(args.l7_ledger)
     return ledgers
 
@@ -148,7 +171,14 @@ def cmd_certify(args) -> int:
     """results.json を tier合格制で判定し「使えるライン」到達レベルを表示する."""
     import json
 
-    from .certify import certify, render_certificate_md
+    from .certify import certify, merge_results, render_certificate_md
+
+    if getattr(args, "merge", False):
+        model, results = merge_results(args.results)
+        cert = certify(results)
+        print(render_certificate_md(cert, model or "merged"))
+        print()
+        return 0
 
     for path in args.results:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -250,6 +280,11 @@ def main() -> None:
 
     p_cert = sub.add_parser("certify", help="使えるライン判定 (tier合格制)")
     p_cert.add_argument("results", nargs="+", help="判定する results.json")
+    p_cert.add_argument(
+        "--merge", action="store_true",
+        help="複数 results.json の results を合算して1つの認証を出す "
+             "(分割実行した base40 + L6 等の統合認証。task_id重複は後勝ち)",
+    )
     p_cert.set_defaults(fn=cmd_certify)
 
     args = parser.parse_args()
