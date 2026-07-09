@@ -45,6 +45,9 @@ llmbench list-tasks            # 既定40個が一覧表示されればOK
 llmbench list-tasks --with-l6  # L6 architect 20個を加えて計60個
 llmbench list-tasks --with-l7             # L7 grandmaster 40個を加えて計80個
 llmbench list-tasks --with-l6 --with-l7   # L6+L7 両方で計100個
+llmbench list-tasks --only-l6             # 既定40問を除外し L6 architect 20個だけ
+llmbench list-tasks --only-l7             # 既定40問を除外し L7 grandmaster 40個だけ
+llmbench list-tasks --only-l6 --only-l7   # 既定40問を除外し L6+L7 だけで計60個
 ```
 
 ---
@@ -259,6 +262,26 @@ llmbench certify results/<stamp>_<model>_results.json
 > L7 は `--with-l7` で測定した results にのみ現れます（既定の40問評価では未測定扱い）。
 > L7 のgateは暫定値であり、実モデル較正で確定する（天井評価帯 — 現行タスク群では頭打ちが見えない水準）。
 
+### 複数 results.json を合算して認証する (`--merge`)
+
+`--only-l6`/`--only-l7` で分割実行すると、1つの results.json には一部のtierしか
+含まれません。そのままでは他tierが「未測定」扱いになるため、`--merge` を付けて
+複数 results.json の `results` 配列を合算してから1回で tier判定します。
+
+```bash
+llmbench certify --merge results/base_results.json results/l6_results.json
+```
+
+- task_id が重複した場合は**後勝ち**（後に指定したファイルの記録で上書き）。
+  同じタスクを再測定した場合に、新しい結果を優先する意図です。
+- モデル名は各ファイルの `model` を出現順・重複除去で `" + "` 連結して表示します
+  （同一モデルなら1つだけ表示）。
+- `--runs` 数が異なる results.json 同士でも合算できます。タスク単位の
+  success_rate（平均）で集計するため計算自体は破綻しませんが、tier内で
+  試行数が不均一になる点には注意してください。
+- `llmbench certify --merge ...` のほか、llmbench非依存の単体スクリプト
+  `python3 certify.py --merge a.json b.json`（stdlibのみ）でも同じことができます。
+
 ### L6 (architect) の追加20問を含めて実行する
 
 L6 は既定では読まれません。`--with-l6` で別台帳 `tasks/tasks_l6.jsonl` をマージし、
@@ -271,6 +294,30 @@ llmbench run --model local-openai --with-l6 \
 t051,t052,t053,t054,t055,t056,t057,t058,t059,t060            # L6だけ
 ```
 
+既定40問を除外し L6 だけを単体実行したい場合は `--only-l6` を使います
+（`--tasks` でIDを列挙するより簡潔で、後述の分割運用フローを想定した専用フラグです）。
+
+```bash
+llmbench run --model local-openai --runs 5 --only-l6   # L6の20問だけ (baseなし)
+```
+
+#### 分割運用フロー（40問 → 後日L6追加 → 統合認証）
+
+L6を含めた全問実行は時間がかかるため、**先に既定40問だけ実行し、後日 L6 の20問
+だけを追加実行して、最後に `certify --merge` で統合認証する**運用を推奨します。
+
+```bash
+# 1. 当日: 既定40問を実行
+llmbench run --model local-openai --runs 5 --output results
+
+# 2. 後日: L6 architect 20問だけ追加実行 (既定40問は含めない)
+llmbench run --model local-openai --runs 5 --only-l6 --output results
+
+# 3. 2つの results.json を合算し、L1〜L6 の統合認証を1回で出す
+llmbench certify --merge results/<stamp1>_<model>_results.json \
+                  results/<stamp2>_<model>_results.json
+```
+
 ### L7 (grandmaster) の追加40問を含めて実行する
 
 L7 も既定では読まれません。`--with-l7` で別台帳 `tasks/tasks_l7.jsonl` をマージし、
@@ -280,6 +327,16 @@ L7 も既定では読まれません。`--with-l7` で別台帳 `tasks/tasks_l7.
 ```bash
 llmbench run --model local-openai --runs 5 --with-l7            # 計80問
 llmbench run --model local-openai --with-l6 --with-l7 --runs 5  # 計100問 (L6+L7)
+```
+
+既定40問を除外し L7 だけを単体実行したい場合は `--only-l7` を使います。
+`--only-l6 --only-l7` を併用すると、既定40問を含めず L6+L7 の60問だけになります
+（`--only-l6 --with-l7` のように only と with を混ぜても、only が1つでもあれば
+既定40問は除外され、最終的な対象は only/with で要求したtierの和集合になります）。
+
+```bash
+llmbench run --model local-openai --runs 5 --only-l7             # L7の40問だけ (baseなし)
+llmbench run --model local-openai --runs 5 --only-l6 --only-l7   # L6+L7 60問 (baseなし)
 ```
 
 L7 (grandmaster) は天井評価帯 — **数値安定性**(t061-068)・**状態一貫性**(t069-076)・

@@ -1,3 +1,37 @@
+# 🆕 分割実行対応 — `--only-l6` / `--only-l7` と `certify --merge`
+
+L6/L7 を含めた全問実行は時間がかかるため、**先に既定40問だけ実行し、後日 L6/L7 だけを
+追加実行して、最後に統合認証する分割運用**に対応しました。**既定の挙動・既存
+`--with-l6`/`--with-l7` は不変**です。`--only-l6`/`--only-l7` を付けたときだけ、既定台帳
+`tasks.jsonl` を除外して指定tierだけを実行します（list-tasks / run / validate 共通）。
+
+| 指定 | 対象問題 | 問題数 |
+|---|---|---|
+| なし | 既定40問 | 40 |
+| `--with-l6` | 既定40問 + L6 20問 | 60 |
+| `--with-l7` | 既定40問 + L7 40問 | 80 |
+| `--with-l6 --with-l7` | 既定40問 + L6 20問 + L7 40問 | 100 |
+| `--only-l6` | L6 20問のみ（baseなし） | 20 |
+| `--only-l7` | L7 40問のみ（baseなし） | 40 |
+| `--only-l6 --only-l7` | L6 20問 + L7 40問（baseなし） | 60 |
+| `--only-l6 --with-l7` | L6 20問 + L7 40問（onlyが1つでもあればbase除外・最終集合はonly/withの和集合） | 60 |
+| `--only-l6 --with-l6` | L6 20問（二重追加なし） | 20 |
+
+| 追加 | 内容 |
+|---|---|
+| 🔀 `--only-l6` / `--only-l7` | list-tasks / run / validate 共通の `_common_args` に追加。既定台帳 `tasks.jsonl` を除外し、指定tierの台帳だけを対象にする。`--with-l6`/`--with-l7`・`--l6-ledger`/`--l7-ledger` はそのまま併用可 |
+| 🔗 `certify --merge` | 複数 `results.json` の `results` 配列を合算して1つのtier認証を出す。`llmbench certify --merge a.json b.json` / llmbench非依存の単体スクリプト `python3 certify.py --merge a.json b.json` の両方に対応 |
+| 🧮 `merge_results()` | task_id 重複は**後勝ち**（後に指定したファイルを優先。再測定結果で上書きする意図）。モデル名は各ファイルの `model` を出現順distinctで `" + "` 連結（同一なら1つ）。`--runs` 数が異なる結果同士の合算も可（タスク単位のsuccess_rate平均で集計するため破綻はしないが、tier内で試行数が不均一になる点は注意） |
+
+**推奨フロー**: `llmbench run`（既定40問）→ 後日 `llmbench run --only-l6`（L6の20問だけ）
+→ `llmbench certify --merge base.json l6.json` で L1〜L6 の統合認証を1回で出す。
+
+**検証**: `list-tasks --only-l6`=20 / `--only-l7`=40 / `--only-l6 --only-l7`=60 を確認。
+追加テスト `tests/test_ledgers.py`（台帳選択マトリクス）・`tests/test_certify_merge.py`
+（`merge_results` の後勝ち・モデル名連結・runs混在）で検証。
+
+---
+
 # 🆕 L7 grandmaster tier (t061–t100) — 任意オプション `--with-l7`
 
 L6 architect でも上位帯(27B dense)がほぼ踏破し（最上位2モデル差=実質1問、生きた弁別
