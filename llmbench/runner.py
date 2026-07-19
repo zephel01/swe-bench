@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import sandbox, usability
+from . import usability
 from .clients import LLMClient, create_client
 from .clients.mock import MockClient
 from .clients.ollama import (
@@ -22,10 +22,7 @@ from .clients.ollama import (
     default_ollama_host,
     list_ollama_models,
 )
-from .functional import evaluate_functional
-from .patch import parse_llm_output
-from .prompts import SYSTEM_PROMPT, build_user_prompt
-from .quality import evaluate_quality
+from .graders import GradeCtx, get_grader
 from .scoring import combined_score, pass_at_k
 from .tasks import Task, load_tasks
 
@@ -58,6 +55,7 @@ class TaskResult:
     task_id: str
     difficulty: str
     title: str = ""
+    domain: str = "code"
     resolved: bool = False
     quality_score: float = 0.0
     combined: float = 0.0
@@ -253,6 +251,24 @@ class BenchmarkRunner:
                 f"reviewer_model {name!r} を解決できません: {e}"
             ) from e
 
+    def _make_judge(self) -> tuple[LLMClient | None, int]:
+        """judge grader 用の採点モデルを構築する (quality.judge).
+
+        未設定・無効なら (None, 1)。この場合 judge grader は hard_constraints のみで
+        決定的に判定する (validate を緑に保つ)。
+        """
+        cfg = self.quality_cfg.get("judge", {})
+        seeds = max(1, int(cfg.get("seeds", 1)))
+        if not cfg.get("enabled", False):
+            return None, seeds
+        name = cfg.get("judge_model")
+        if not name:
+            raise ValueError("quality.judge.enabled ですが judge_model が未指定です")
+        try:
+            return create_client(name, self.resolve_model(name)), seeds
+        except ValueError as e:
+            raise ValueError(f"judge_model {name!r} を解決できません: {e}") from e
+
     def run(
         self,
         model_name: str,
@@ -272,6 +288,7 @@ class BenchmarkRunner:
             ),
         )
         reviewer = self._make_reviewer()
+        judge, judge_seeds = self._make_judge()
         lang = self.run_cfg.get("issue_lang", "en")
         timeout = int(self.run_cfg.get("test_timeout", 120))
         retries = int(self.run_cfg.get("generate_retries", 1))
@@ -309,7 +326,8 @@ class BenchmarkRunner:
             # 性能制約タスクは個別 perf_timeout を優先 (無ければ config 既定)
             task_timeout = task.perf_timeout or timeout
             tr = self._run_task(
-                client, reviewer, task, lang, task_timeout, retries, runs
+                client, reviewer, judge, judge_seeds,
+                task, lang, task_timeout, retries, runs,
             )
             run.results.append(tr)
             _log_task(progress, tr)
@@ -318,27 +336,27 @@ class BenchmarkRunner:
     def _one_attempt(
         self,
         client: LLMClient,
-        reviewer: LLMClient | None,
-        task: Task,
-        issue: str,
+        grader,
+        system: str,
         user_prompt: str,
-        timeout: int,
+        task: Task,
+        ctx: GradeCtx,
         retries: int,
     ) -> Attempt:
-        """1回分の 生成→パース→テスト→品質→スコア を評価する."""
+        """1回分の 生成→採点 を評価する (grader 差し替え可)."""
         at = Attempt()
-        patch = None
         total_latency = 0.0
         gen = None
+        ev = None
         for _ in range(retries + 1):
             try:
-                gen = client.generate(SYSTEM_PROMPT, user_prompt)
+                gen = client.generate(system, user_prompt)
             except Exception as e:  # 生成失敗はその試行を失敗扱い
                 at.fail_reason = f"generation error: {e}"
                 return at
             total_latency += gen.latency_sec
-            patch = parse_llm_output(gen.text, task.files)
-            if patch.parse_ok:
+            ev = grader.evaluate(task, gen.text, ctx)
+            if ev.parse_ok:
                 break
         at.latency_sec = round(total_latency, 2)
         if gen is not None:
@@ -347,28 +365,15 @@ class BenchmarkRunner:
             )
             at.completion_tokens = gen.completion_tokens
             at.raw_output = gen.text
-        if patch is not None:
-            at.parse_ok = patch.parse_ok
-            at.parse_error = patch.error
-            at.parsed_files = dict(patch.files)
-
-        func, ws = evaluate_functional(
-            task.dir, patch, self.work_root, timeout=timeout, keep_workspace=True
-        )
-        at.resolved = func.resolved
-        at.fail_reason = func.fail_reason
-        at.test_output = func.test_output
-        try:
-            if ws is not None and func.applied_files:
-                q = evaluate_quality(
-                    ws, func.applied_files, self.quality_cfg,
-                    issue_text=issue, reviewer_client=reviewer,
-                )
-                at.quality_score = q.score
-                at.quality_components = q.components
-        finally:
-            if ws is not None:
-                sandbox.cleanup(ws)
+        if ev is not None:
+            at.resolved = ev.resolved
+            at.quality_score = ev.quality_score
+            at.parse_ok = ev.parse_ok
+            at.parse_error = ev.parse_error
+            at.parsed_files = ev.parsed_files
+            at.fail_reason = ev.fail_reason or at.fail_reason
+            at.test_output = ev.detail_output
+            at.quality_components = ev.components
 
         at.combined = combined_score(at.resolved, at.quality_score, self.scoring_cfg)
         return at
@@ -377,6 +382,8 @@ class BenchmarkRunner:
         self,
         client: LLMClient,
         reviewer: LLMClient | None,
+        judge: LLMClient | None,
+        judge_seeds: int,
         task: Task,
         lang: str,
         timeout: int,
@@ -385,17 +392,26 @@ class BenchmarkRunner:
     ) -> TaskResult:
         tr = TaskResult(
             task_id=task.task_id, difficulty=task.difficulty, title=task.title,
-            runs=runs,
+            domain=task.domain, runs=runs,
         )
         if isinstance(client, MockClient):
-            client.current_task_dir = task.dir
+            client.current_task = task
+            client.current_task_dir = task.dir   # 後方互換
 
-        issue = task.issue(lang)
-        user_prompt = build_user_prompt(issue, task.read_buggy_files())
+        grader = get_grader(task.grader)
+        system, user_prompt = grader.build_prompt(task, lang)
+        ctx = GradeCtx(
+            work_root=self.work_root,
+            quality_cfg=self.quality_cfg,
+            scoring_cfg=self.scoring_cfg,
+            graders_cfg=self.config.get("graders", {}),
+            reviewer=reviewer, judge=judge, judge_seeds=judge_seeds,
+            timeout=timeout, lang=lang,
+        )
 
         def _attempt(_i):
             return self._one_attempt(
-                client, reviewer, task, issue, user_prompt, timeout, retries
+                client, grader, system, user_prompt, task, ctx, retries
             )
 
         # 試行(runs)を並列実行する。LLM生成がボトルネックなので、サーバ側を

@@ -1,0 +1,10 @@
+{
+  "findings": [
+    {
+      "id": "path_traversal",
+      "cwe": "CWE-22",
+      "any_of": ["os.path.join", "user_path", "../", "name"],
+      "keywords_all": ["travers"]
+    }
+  ]
+}

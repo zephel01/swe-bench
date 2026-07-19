@@ -190,6 +190,23 @@ def render_markdown(run) -> str:
         avg_q = f"{sum(qs) / len(qs):.0f}" if qs else "-"
         lines.append(f"| {diff} | {solved}/{len(rs)} | {avg_q} |")
 
+    # ドメイン別集計 (コーディング以外の grader が混在する場合のみ)
+    domains = [d for d in ("security", "general", "writing", "medical")
+               if any(getattr(r, "domain", "code") == d for r in run.results)]
+    if domains:
+        _dlabel = {"security": "🛡️ security", "general": "📋 general",
+                   "writing": "✍️ writing", "medical": "🩺 medical"}
+        lines += ["", "## 🌐 ドメイン別 (コーディング以外)", "",
+                  "| Domain | Resolved | 平均成功率 | 平均combined |", "|---|---|---|---|"]
+        for d in domains:
+            rs = [r for r in run.results if getattr(r, "domain", "code") == d]
+            solved = sum(r.resolved for r in rs)
+            sr = sum(r.success_rate for r in rs) / len(rs) * 100
+            cb = sum(r.combined for r in rs) / len(rs)
+            lines.append(
+                f"| {_dlabel[d]} | {solved}/{len(rs)} | {sr:.0f}% | {cb:.1f} |"
+            )
+
     # タスク別の詳細 (生成物・品質内訳)
     lines += ["", "## タスク別詳細", ""]
     for r in run.results:

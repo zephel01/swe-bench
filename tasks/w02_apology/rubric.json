@@ -1,0 +1,11 @@
+{
+  "hard_constraints": [
+    {"kind": "word_count", "min": 60, "max": 160}
+  ],
+  "criteria": [
+    {"name": "empathy", "weight": 1.0, "desc": "The email genuinely acknowledges customer frustration and takes ownership of the incident."},
+    {"name": "completeness", "weight": 1.0, "desc": "Covers the cause, the fix/prevention plan, and the goodwill gesture."},
+    {"name": "professionalism", "weight": 1.0, "desc": "Tone is professional, calm, and appropriate for a customer-facing incident notice."}
+  ],
+  "pass_score": 7.0
+}

@@ -1,0 +1,5 @@
+- Improves cardiovascular health and boosts overall energy levels
+- Reduces stress and helps regulate mood throughout the workday
+- Enhances focus and mental clarity during long meetings
+- Supports better sleep quality and faster recovery overnight
+- Strengthens muscles and helps prevent posture-related back pain

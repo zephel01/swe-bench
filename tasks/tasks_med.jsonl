@@ -1,0 +1,24 @@
+{"task_id": "m01", "dir": "m01_pharm_mcq", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "Pharmacology: proton-pump inhibitor MoA"}
+{"task_id": "m02", "dir": "m02_diag_mcq", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "Diagnosis: SLE (anti-dsDNA)"}
+{"task_id": "m03", "dir": "m03_firstline", "grader": "qa", "domain": "medical", "difficulty": "med_basic", "title": "First-line: anaphylaxis (epinephrine)"}
+{"task_id": "m04", "dir": "m04_physio", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "Physiology: ADH / aquaporin-2"}
+{"task_id": "m05", "dir": "m05_clopidogrel_moa", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "Mechanism of action of clopidogrel"}
+{"task_id": "m06", "dir": "m06_acetaminophen_antidote", "grader": "qa", "domain": "medical", "difficulty": "med_basic", "title": "Antidote for acetaminophen overdose"}
+{"task_id": "m07", "dir": "m07_inferior_mi_artery", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "Culprit artery in inferior STEMI"}
+{"task_id": "m08", "dir": "m08_hcm_diagnosis", "grader": "qa", "domain": "medical", "difficulty": "med_hard", "title": "Exertional syncope with dynamic murmur diagnosis"}
+{"task_id": "m09", "dir": "m09_anaphylaxis_firstline", "grader": "qa", "domain": "medical", "difficulty": "med_basic", "title": "First-line drug in anaphylaxis"}
+{"task_id": "m10", "dir": "m10_opioid_antidote", "grader": "qa", "domain": "medical", "difficulty": "med_basic", "title": "Antidote for opioid overdose"}
+{"task_id": "m11", "dir": "m11_dka_initial_therapy", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "Initial therapy in diabetic ketoacidosis"}
+{"task_id": "m12", "dir": "m12_primary_aldosteronism", "grader": "qa", "domain": "medical", "difficulty": "med_hard", "title": "Resistant hypertension with hypokalemia diagnosis"}
+{"task_id": "m13", "dir": "m13_lyme_firstline", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "First-line oral antibiotic for early Lyme disease"}
+{"task_id": "m14", "dir": "m14_pasteurella_bite", "grader": "qa", "domain": "medical", "difficulty": "med_hard", "title": "Organism in rapidly progressive cat-bite cellulitis"}
+{"task_id": "m15", "dir": "m15_rta", "grader": "qa", "domain": "medical", "difficulty": "med_hard", "title": "Distal (type 1) renal tubular acidosis"}
+{"task_id": "m16", "dir": "m16_ascendinglimb", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "Loop of Henle thick ascending limb"}
+{"task_id": "m17", "dir": "m17_abducens", "grader": "qa", "domain": "medical", "difficulty": "med_basic", "title": "Abducens (CN VI) palsy"}
+{"task_id": "m18", "dir": "m18_sah", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "Subarachnoid hemorrhage"}
+{"task_id": "m19", "dir": "m19_croup", "grader": "qa", "domain": "medical", "difficulty": "med_basic", "title": "Croup (viral laryngotracheitis)"}
+{"task_id": "m20", "dir": "m20_duodenalatresia", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "Duodenal atresia (double bubble)"}
+{"task_id": "m21", "dir": "m21_eclampsia", "grader": "qa", "domain": "medical", "difficulty": "med_std", "title": "Eclampsia seizure management"}
+{"task_id": "m22", "dir": "m22_molarpregnancy", "grader": "qa", "domain": "medical", "difficulty": "med_hard", "title": "Hydatidiform (molar) pregnancy"}
+{"task_id": "m23", "dir": "m23_nac", "grader": "qa", "domain": "medical", "difficulty": "med_basic", "title": "Acetaminophen overdose antidote"}
+{"task_id": "m24", "dir": "m24_ethyleneglycol", "grader": "qa", "domain": "medical", "difficulty": "med_hard", "title": "Ethylene glycol poisoning"}

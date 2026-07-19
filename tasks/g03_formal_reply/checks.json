@@ -1,0 +1,6 @@
+[
+  {"kind": "starts_with", "text": "Dear"},
+  {"kind": "contains", "text": "we apologize for the inconvenience", "ci": true},
+  {"kind": "not_contains", "text": "unfortunately"},
+  {"kind": "word_count", "min": 60, "max": 150}
+]

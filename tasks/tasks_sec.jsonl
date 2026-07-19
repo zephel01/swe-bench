@@ -1,0 +1,4 @@
+{"task_id": "s01", "dir": "s01_pathtrav", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Path traversal in file reader"}
+{"task_id": "s02", "dir": "s02_sqli", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "SQL injection in user lookup"}
+{"task_id": "s03", "dir": "s03_bruteforce", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "SSH brute-force in auth log"}
+{"task_id": "s04", "dir": "s04_clean", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Clean configuration loader (decoy)"}

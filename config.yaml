@@ -9,7 +9,13 @@ models:
     model: "auto"   # auto = サーバ(/v1/models)のロード中モデルを自動採用。ggufを差し替えてもconfig編集不要
     api_key: "sk-local"                    # ローカルはダミーでOK
     temperature: 0.2
-    max_tokens: 4096
+    # Gemma 4 等の thinking(推論)モデル対策で 4096 → 24576 に引き上げ。
+    #   推論モデルは <think> 分の reasoning トークンで出力予算を食う。4096 だと
+    #   難タスク(expert/frontier/architect)で推論だけで上限に達し、パッチ(content)を
+    #   出す前に生成停止 → content 空 → "empty output / patch parse failed" になる。
+    #   llama-server は -c 32768 で起動しているので 24576 でも余裕(prompt は小さい)。
+    #   非推論モデル(qwen2.5-coder 等)なら 4096 のままで良い。
+    max_tokens: 24576
     timeout: 600
 
   # Ollama
@@ -76,6 +82,10 @@ quality:
     weight: 0.0           # 有効化時に重みを再配分すること
     host_url: "http://localhost:9000"
     token: ""
+  judge:                  # judge grader (創作/writing) の採点モデル
+    enabled: false        # 別系統の judge を起動しているとき true (self-preference回避に judge≠候補)
+    judge_model: local-openai
+    seeds: 1              # 1問を何回採点して平均するか (>1 で judge一致率を計測)
 
 scoring:
   # combined = success_rate * (floor + (1 - floor) * quality / 100)
@@ -89,3 +99,16 @@ usability:
   autonomous: {min_success: 0.9, min_quality: 80}   # レビューほぼ不要で任せられる
   assisted:   {min_success: 0.6, min_quality: 0}    # レビュー前提なら使える
   # 上記いずれにも満たないものは unusable (不可)
+
+graders:
+  # コーディング以外のドメイン採点器のしきい値 (DESIGN_DOMAINS.md 参照)
+  detection: {pass_f1: 0.67}     # 検出: F1 がこの値以上で resolved
+  constraint: {pass_ratio: 1.0}  # 指示追従: 全チェック通過で resolved (instruction-strict)
+  judge: {pass_score: 7.0}       # 創作: judge 平均スコア(0-10)がこの値以上で resolved
+
+certify_domains:
+  # ドメイン別「使えるライン」ゲート (暫定。実モデル較正で確定)。
+  security: {min_success: 0.6, min_combined: 60}
+  general:  {min_success: 0.7, min_combined: 65}
+  writing:  {min_success: 0.5, min_combined: 55, experimental: true}   # 未較正
+  medical:  {min_success: 0.6, min_combined: 60, reference: true}      # 参考値

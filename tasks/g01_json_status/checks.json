@@ -1,0 +1,6 @@
+[
+  {"kind": "json_valid"},
+  {"kind": "json_path", "path": "status", "equals": "ok"},
+  {"kind": "contains", "text": "service", "ci": true},
+  {"kind": "char_count", "min": 40, "max": 300}
+]

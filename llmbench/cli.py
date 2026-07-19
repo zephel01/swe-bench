@@ -58,6 +58,30 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
         "--only-l7", action="store_true", dest="only_l7",
         help="既定40問を除外し L7 (grandmaster) の追加台帳だけを実行する",
     )
+    # --- ドメイン台帳 (コーディング以外) ---
+    for dom, desc in (
+        ("sec", "security 検出/解析"),
+        ("gen", "general 一般タスク/指示追従"),
+        ("write", "writing 創作 (experimental)"),
+        ("med", "medical QA (参考値)"),
+    ):
+        parser.add_argument(
+            f"--with-{dom}", action="store_true", dest=f"with_{dom}",
+            help=f"既定タスクに {desc} 台帳 (tasks_{dom}.jsonl) を上乗せする",
+        )
+        parser.add_argument(
+            f"--only-{dom}", action="store_true", dest=f"only_{dom}",
+            help=f"既定タスクを除外し {desc} 台帳だけを実行する",
+        )
+
+
+# ドメイン名 -> 台帳ファイル名
+_DOMAIN_LEDGERS = {
+    "sec": "tasks_sec.jsonl",
+    "gen": "tasks_gen.jsonl",
+    "write": "tasks_write.jsonl",
+    "med": "tasks_med.jsonl",
+}
 
 
 def _ledgers(args) -> list[str]:
@@ -75,12 +99,18 @@ def _ledgers(args) -> list[str]:
     with_l6 = getattr(args, "with_l6", False)
     with_l7 = getattr(args, "with_l7", False)
 
-    only_mode = only_l6 or only_l7
+    only_dom = {d for d in _DOMAIN_LEDGERS if getattr(args, f"only_{d}", False)}
+    with_dom = {d for d in _DOMAIN_LEDGERS if getattr(args, f"with_{d}", False)}
+
+    only_mode = only_l6 or only_l7 or bool(only_dom)
     ledgers = [] if only_mode else ["tasks.jsonl"]
     if only_l6 or with_l6:
         ledgers.append(args.l6_ledger)
     if only_l7 or with_l7:
         ledgers.append(args.l7_ledger)
+    for d in _DOMAIN_LEDGERS:
+        if d in only_dom or d in with_dom:
+            ledgers.append(_DOMAIN_LEDGERS[d])
     return ledgers
 
 
@@ -171,19 +201,33 @@ def cmd_certify(args) -> int:
     """results.json を tier合格制で判定し「使えるライン」到達レベルを表示する."""
     import json
 
-    from .certify import certify, merge_results, render_certificate_md
+    from .certify import (
+        certify, certify_domains, certify_medical, merge_results,
+        render_certificate_md, render_domains_md, render_medical_md,
+    )
 
     if getattr(args, "merge", False):
         model, results = merge_results(args.results)
-        cert = certify(results)
-        print(render_certificate_md(cert, model or "merged"))
+        print(render_certificate_md(certify(results), model or "merged"))
+        dom = render_domains_md(certify_domains(results))
+        if dom:
+            print("\n" + dom)
+        med = render_medical_md(certify_medical(results))
+        if med:
+            print("\n" + med)
         print()
         return 0
 
     for path in args.results:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-        cert = certify(data.get("results", []))
-        print(render_certificate_md(cert, data.get("model", "")))
+        results = data.get("results", [])
+        print(render_certificate_md(certify(results), data.get("model", "")))
+        dom = render_domains_md(certify_domains(results))
+        if dom:
+            print("\n" + dom)
+        med = render_medical_md(certify_medical(results))
+        if med:
+            print("\n" + med)
         print()
     return 0
 

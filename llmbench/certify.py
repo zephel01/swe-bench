@@ -201,6 +201,169 @@ def render_certificate_md(cert: dict, model: str = "") -> str:
     return "\n".join(lines)
 
 
+# ===== ドメイン別認証 (コーディング以外) =====
+
+DOMAIN_ORDER = ["security", "general", "writing", "medical"]
+
+DOMAIN_LABEL = {
+    "security": "🛡️ security 検出/解析",
+    "general": "📋 general 指示追従",
+    "writing": "✍️ writing 創作",
+    "medical": "🩺 medical QA",
+}
+
+# ドメイン別ゲート (暫定。experimental/reference はバランス指数から除外)。
+DEFAULT_DOMAIN_GATES = {
+    "security": {"min_success": 0.60, "min_combined": 60.0},
+    "general": {"min_success": 0.70, "min_combined": 65.0},
+    "writing": {"min_success": 0.50, "min_combined": 55.0, "experimental": True},
+    "medical": {"min_success": 0.60, "min_combined": 60.0, "reference": True},
+}
+
+
+def aggregate_by_domain(results: list[dict]) -> dict[str, dict]:
+    """domain ごとに success_rate / combined を集計 (code は除外)."""
+    buckets: dict[str, dict[str, list]] = {}
+    for t in results:
+        dom = t.get("domain", "code")
+        if dom == "code":
+            continue
+        b = buckets.setdefault(dom, {"success": [], "combined": [], "ids": []})
+        b["success"].append(_task_success(t))
+        b["combined"].append(float(t.get("combined", 0.0)))
+        b["ids"].append(t.get("task_id"))
+    return {
+        d: {"n": len(b["ids"]), "mean_success": _mean(b["success"]),
+            "mean_combined": _mean(b["combined"]), "task_ids": b["ids"]}
+        for d, b in buckets.items()
+    }
+
+
+def _coding_combined(results: list[dict]) -> tuple[float, int]:
+    xs = [float(t.get("combined", 0.0)) for t in results
+          if t.get("domain", "code") == "code"]
+    return _mean(xs), len(xs)
+
+
+def certify_domains(results: list[dict], gates: dict | None = None) -> dict:
+    """ドメイン別ゲート判定 + バランス指数.
+
+    バランス指数 = coding + 非experimentalドメインの平均combined(0-1)の調和平均×100。
+    一芸特化(あるドメインだけ低い)モデルほど大きく下がる。
+    """
+    gates = gates or DEFAULT_DOMAIN_GATES
+    agg = aggregate_by_domain(results)
+    rows = []
+    for dom in DOMAIN_ORDER:
+        if dom not in agg:
+            continue
+        a = agg[dom]
+        g = gates.get(dom, {})
+        passed = (
+            a["mean_success"] >= g.get("min_success", 0.0)
+            and a["mean_combined"] >= g.get("min_combined", 0.0)
+        )
+        rows.append({
+            "domain": dom, "n": a["n"],
+            "mean_success": a["mean_success"], "mean_combined": a["mean_combined"],
+            "gate_pass": passed, "gate": g,
+            "experimental": bool(g.get("experimental") or g.get("reference")),
+        })
+    # バランス指数 (coding + 非experimentalドメイン)
+    members: list[tuple[str, float]] = []
+    cc, cn = _coding_combined(results)
+    if cn:
+        members.append(("code", cc))
+    for r in rows:
+        if not r["experimental"]:
+            members.append((r["domain"], r["mean_combined"]))
+    balance = None
+    if len(members) >= 1:
+        vals = [max(1e-9, s / 100.0) for _, s in members]
+        balance = round(len(vals) / sum(1.0 / v for v in vals) * 100.0, 1)
+    return {
+        "domains": rows, "balance_index": balance,
+        "balance_members": [d for d, _ in members],
+    }
+
+
+def render_domains_md(cd: dict) -> str:
+    if not cd["domains"]:
+        return ""
+    lines = ["## 🌐 ドメイン別認証 (コーディング以外)", ""]
+    lines.append("| Domain | タスク数 | 平均成功率 | 平均combined | gate(成功率/combined) | 判定 |")
+    lines.append("|---|---|---|---|---|---|")
+    for r in cd["domains"]:
+        g = r["gate"]
+        gate_s = f"≥{g.get('min_success', 0):.0%} / ≥{g.get('min_combined', 0):.0f}"
+        mark = "✅合格" if r["gate_pass"] else "❌不合格"
+        tag = " *(experimental)*" if r["experimental"] else ""
+        lines.append(
+            f"| {DOMAIN_LABEL.get(r['domain'], r['domain'])}{tag} | {r['n']} | "
+            f"{r['mean_success']:.0%} | {r['mean_combined']:.1f} | {gate_s} | {mark} |"
+        )
+    if cd["balance_index"] is not None:
+        lines += [
+            "",
+            f"**⚖️ バランス指数: {cd['balance_index']:.1f} / 100** "
+            f"（{' + '.join(cd['balance_members'])} の調和平均。"
+            f"一芸特化＝あるドメインだけ低いと大きく下がる）",
+            "> writing/medical は experimental/参考値のため、既定でバランス指数から除外。",
+        ]
+    return "\n".join(lines)
+
+
+# ===== 医療QA 詳細 (難易度別 正答率・参考値) =====
+
+MED_TIER_ORDER = ["med_basic", "med_std", "med_hard"]
+MED_TIER_LABEL = {
+    "med_basic": "MED-basic 基礎",
+    "med_std": "MED-std 標準(board)",
+    "med_hard": "MED-hard 専門",
+}
+# 参考ゲート (未較正)。accuracy = 平均 success_rate。
+DEFAULT_MED_GATES = {"med_basic": 0.80, "med_std": 0.60, "med_hard": 0.40}
+
+
+def certify_medical(results: list[dict]) -> dict:
+    """medical ドメインを難易度(med_basic/std/hard)別に正答率集計する."""
+    buckets: dict[str, list] = {}
+    for t in results:
+        if t.get("domain") != "medical":
+            continue
+        buckets.setdefault(t.get("difficulty", "med_std"), []).append(_task_success(t))
+    rows, overall = [], []
+    for tier in MED_TIER_ORDER:
+        if tier not in buckets:
+            continue
+        xs = buckets[tier]
+        overall += xs
+        acc = _mean(xs)
+        gate = DEFAULT_MED_GATES.get(tier, 0.0)
+        rows.append({"tier": tier, "n": len(xs), "accuracy": acc,
+                     "gate": gate, "pass": acc >= gate})
+    return {"tiers": rows, "n": len(overall),
+            "accuracy": _mean(overall) if overall else None}
+
+
+def render_medical_md(cm: dict) -> str:
+    if not cm["tiers"]:
+        return ""
+    lines = ["## 🩺 medical QA 詳細 (参考値・未較正)", ""]
+    lines.append(f"**総合正答率: {cm['accuracy'] * 100:.1f}%（{cm['n']}問）**")
+    lines.append(
+        "> 5択MCQのチャンス正答率は約20%。これは参考値であり臨床的妥当性の保証ではない。"
+    )
+    lines += ["", "| 難易度 | 問題数 | 正答率 | 参考gate |", "|---|---|---|---|"]
+    for r in cm["tiers"]:
+        mark = "✅" if r["pass"] else "⚠️"
+        lines.append(
+            f"| {MED_TIER_LABEL.get(r['tier'], r['tier'])} | {r['n']} | "
+            f"{r['accuracy'] * 100:.0f}% {mark} | ≥{r['gate'] * 100:.0f}% |"
+        )
+    return "\n".join(lines)
+
+
 def _load_results(path: Path) -> tuple[str, list[dict]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     return data.get("model", ""), data.get("results", [])
@@ -246,12 +409,24 @@ def main(argv: list[str]) -> int:
     if ns.merge:
         model, results = merge_results(ns.results)
         print(render_certificate_md(certify(results), model or "merged"))
+        dom = render_domains_md(certify_domains(results))
+        if dom:
+            print("\n" + dom)
+        med = render_medical_md(certify_medical(results))
+        if med:
+            print("\n" + med)
         print()
         return 0
 
     for arg in ns.results:
         model, results = _load_results(Path(arg))
         print(render_certificate_md(certify(results), model))
+        dom = render_domains_md(certify_domains(results))
+        if dom:
+            print("\n" + dom)
+        med = render_medical_md(certify_medical(results))
+        if med:
+            print("\n" + med)
         print()
     return 0
 

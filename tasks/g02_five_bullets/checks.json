@@ -1,0 +1,6 @@
+[
+  {"kind": "line_count", "min": 5, "max": 5},
+  {"kind": "regex", "pattern": "^- ", "flags": "m"},
+  {"kind": "not_contains", "text": "```"},
+  {"kind": "word_count", "min": 15, "max": 90}
+]

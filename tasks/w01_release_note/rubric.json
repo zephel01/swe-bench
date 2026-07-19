@@ -1,0 +1,11 @@
+{
+  "hard_constraints": [
+    {"kind": "word_count", "min": 80, "max": 200}
+  ],
+  "criteria": [
+    {"name": "clarity", "weight": 1.0, "desc": "The note is clear, well-organized, and easy to read."},
+    {"name": "coverage", "weight": 1.0, "desc": "All three named features (Dark Mode, Offline Sync, Faster Search) are clearly and specifically described."},
+    {"name": "tone", "weight": 1.0, "desc": "The tone is upbeat and professional, appropriate for a public changelog."}
+  ],
+  "pass_score": 7.0
+}

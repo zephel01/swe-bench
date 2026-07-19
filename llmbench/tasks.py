@@ -6,15 +6,19 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from .graders import GRADER_DOMAIN
+
 
 @dataclass
 class Task:
     task_id: str
-    difficulty: str          # easy | medium | hard
+    difficulty: str          # easy | medium | hard ... | sec_* | gen_* | med_* 等
     title: str
     dir: Path                # tasks/t001_xxx/
     files: list[str]         # buggy_code配下の相対パス一覧
     perf_timeout: int | None = None  # 性能制約タスク用の個別タイムアウト(秒)
+    grader: str = "code"     # code | detection | constraint | judge | qa
+    domain: str = "code"     # code | security | general | writing | medical
 
     def issue(self, lang: str = "en") -> str:
         name = "issue_ja.md" if lang == "ja" else "issue.md"
@@ -52,10 +56,13 @@ def load_tasks(
                 continue
             rec = json.loads(line)
             task_dir = tasks_root / rec["dir"]
-            files = [
-                str(p.relative_to(task_dir / "buggy_code"))
-                for p in sorted((task_dir / "buggy_code").rglob("*.py"))
-            ]
+            # buggy_code が無いドメインタスク (detection/constraint/judge/qa) を許容する
+            bc = task_dir / "buggy_code"
+            files = (
+                [str(p.relative_to(bc)) for p in sorted(bc.rglob("*.py"))]
+                if bc.exists() else []
+            )
+            grader = rec.get("grader", "code")
             t = Task(
                 task_id=rec["task_id"],
                 difficulty=rec["difficulty"],
@@ -63,6 +70,8 @@ def load_tasks(
                 dir=task_dir,
                 files=files,
                 perf_timeout=rec.get("perf_timeout"),
+                grader=grader,
+                domain=rec.get("domain") or GRADER_DOMAIN.get(grader, "code"),
             )
             if only and t.task_id not in only:
                 continue

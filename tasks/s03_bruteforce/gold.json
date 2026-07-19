@@ -1,0 +1,10 @@
+{
+  "findings": [
+    {
+      "id": "ssh_brute_force",
+      "cwe": "CWE-307",
+      "any_of": ["203.0.113.66", "failed password", "deploy", "accepted password"],
+      "keywords_all": ["brute"]
+    }
+  ]
+}
