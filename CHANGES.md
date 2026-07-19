@@ -1,3 +1,37 @@
+# 🆕 マルチドメイン評価 — security / general / writing / medical (pluggable grader)
+
+コーディング専用だった評価を、**採点器(grader)を差し替え可能**にして他能力へ横展開しました。
+各 grader は「出力契約(プロンプト)」と「採点」を持ち、最終的に `(resolved, quality)` に
+正規化して返すため、既存の pass@k / combined / usability / certify は**無改修**で共有されます。
+**既定の挙動・既存スコアは不変**（`grader` 未指定は `code`、既定台帳のみの実行は結果一致）。
+
+| ドメイン | grader | 台帳 / フラグ | 採点 |
+|---|---|---|---|
+| 🛡️ security | detection | tasks_sec.jsonl / `--with-sec` `--only-sec` | 脆弱性/侵害の検出を precision/recall/F1。**クリーンなデコイ**で過検出(FP)を罰する |
+| 📋 general | constraint | tasks_gen.jsonl / `--with-gen` `--only-gen` | 指示追従を IFEval式に機械検証(文字数/JSON/正規表現…)。全通過で成功、通過率が quality |
+| ✍️ writing | judge | tasks_write.jsonl / `--with-write` `--only-write` | rubric+judgeで0–10採点(experimental)。judge無しは hard制約のみで決定的判定 |
+| 🩺 medical | qa | tasks_med.jsonl / `--with-med` `--only-med` | 医療QAをアンサーキー照合。gold に**日英許容語**→ `--lang ja` のJPモデルも正答扱い(参考値) |
+
+| 追加/変更 | 内容 |
+|---|---|
+| 🌐 `llmbench/graders/` | base/registry + `checks.py`(IFEval) + `code`/`detection`/`constraint`/`judge`/`qa` |
+| 🚩 CLI | `--with-sec/gen/write/med` と `--only-*`(`--with-l6/l7` と同体系)。`_ledgers()` を拡張 |
+| 🎓 `certify` | ドメイン別ゲート + **バランス指数**(coding＋非experimentalの調和平均で一芸特化を減点) + 医療の難易度別正答率(basic/std/hard) |
+| ⚙️ config | `graders:`(pass_f1 / pass_ratio / pass_score)・`quality.judge:`・`certify_domains:` |
+| 📊 report | ドメイン別サマリ節を追加 |
+| 🩺 医療QA 24問 | 薬理/循環器/救急/内分泌/感染/腎/神経/小児/産婦/中毒。**独立エージェントでファクトチェック済**。MCQ＋短答、難易度 basic/std/hard、日英許容語で JP 医療モデルも測定可 |
+| 📐 仕様書 | `DESIGN_DOMAINS.md`(pluggable grader の設計・各スキーマ・採点規約) |
+
+**検証**: `llmbench validate --only-sec|gen|write|med` が全て PASS(gold全成功・broken全失敗)。
+grader 判別テスト(正答→高スコア / 曖昧→0 / デコイ過検出→precision0で失格 / 4個の箇条書き→75点)、
+および日本語回答(「アドレナリンを筋注」「くも膜下出血」等)が正答・誤答が失格することを確認。
+
+> 注: writing/medical のゲート閾値は暫定(未較正)。医療は臨床的妥当性の保証ではなく
+> 参考値(5択MCQのチャンス正答率≈20%)。判定は `certify.py` の `DEFAULT_DOMAIN_GATES` /
+> `DEFAULT_MED_GATES`、`config.yaml` の `graders:` / `certify_domains:` で調整可能。
+
+---
+
 # 🆕 分割実行対応 — `--only-l6` / `--only-l7` と `certify --merge`
 
 L6/L7 を含めた全問実行は時間がかかるため、**先に既定40問だけ実行し、後日 L6/L7 だけを

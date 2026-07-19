@@ -26,6 +26,8 @@
 13. [集計データ (`results.json`) の活用](#13-集計データ-resultsjson-の活用)
 14. [典型的なワークフロー](#14-典型的なワークフロー)
 15. [トラブルシューティング](#15-トラブルシューティング)
+16. [マルチドメイン評価を実行する](#16-マルチドメイン評価を実行する)
+17. [マルチドメイン結果の読み方](#17-マルチドメイン結果の読み方)
 
 ---
 
@@ -620,3 +622,93 @@ llmbench run --model <model> --tasks t011,t013
 > **②レポートの整形**（サマリ表・タスク別詳細・読める品質内訳）、
 > **③実行ログの強化**（生成ファイル・コード冒頭・テスト失敗末尾）。
 > これにより「スコアが出る」だけでなく「**なぜそのスコアなのかをコードまで遡って確認できる**」ようになりました。
+
+---
+
+## 16. マルチドメイン評価を実行する
+
+コーディング以外の能力（セキュリティ検出・指示追従・創作・医療QA）は、`--with-l6`/`--with-l7` と
+同じ体系のフラグで評価します。既定の40タスクとは別台帳（`tasks_sec.jsonl` / `tasks_gen.jsonl` /
+`tasks_write.jsonl` / `tasks_med.jsonl`）に格納されており、フラグを付けない限り実行対象になりません。
+各グレーダーは最終的に `(resolved, quality)` に正規化されるため、`--runs`・usability・compare・certify
+は既存タスクと全く同じ手順で使えます。ドメインの詳細な採点方式は `MANUAL.md` の10章、タスク一覧は
+`TASKS.md` を参照してください。
+
+```bash
+# 既定40問に security/general を上乗せ
+llmbench run --model local-openai --with-sec --with-gen --runs 5
+
+# ドメインだけを単体実行（baseなし。分割運用向け）
+llmbench run --model local-openai --only-sec --runs 5
+llmbench run --model local-openai --only-gen --runs 5
+llmbench run --model local-openai --only-write --runs 5
+
+# 医療QAを日本語モデルで単体実行（gold keywordは日英両対応なので --lang ja でも正しく採点される）
+llmbench run --model local-openai --only-med --lang ja --runs 5
+```
+
+自己検証（LLM接続不要。タスクを自作/変更した直後にも使える）:
+
+```bash
+llmbench validate --only-sec
+llmbench validate --only-gen
+llmbench validate --only-write
+llmbench validate --only-med
+```
+
+各ドメインとも、gold相当の出力を返すモックが全問成功、broken相当が全問失敗すれば健全です。
+
+### 分割運用（既定40問 → 後日ドメイン追加 → 統合認証）
+
+L6/L7 と同じ考え方で、既定40問と各ドメインを別日に実行し、`certify --merge` で統合できます。
+
+```bash
+llmbench run --model local-openai --runs 5 --output results                        # 1. 当日: 既定40問
+llmbench run --model local-openai --only-med --lang ja --runs 5 --output results   # 2. 後日: 医療QAを追加
+llmbench certify --merge results/<stamp1>_<model>_results.json \
+                  results/<stamp2>_<model>_results.json                            # 3. 統合認証
+```
+
+> **writing (`judge` grader) は experimental です。** `config.yaml` の `quality.judge.enabled: true` と
+> `judge_model` を設定しないと、決定的な `hard_constraints`（文字数など）のみで判定されます
+> （judgeなしでも動作しますが採点粒度は粗くなります）。self-preference回避のため、候補モデルとは
+> 別系統の judge モデルを推奨します。
+
+---
+
+## 17. マルチドメイン結果の読み方
+
+非コーディングドメインを測定した results.json を `certify` に渡すと、通常のtier(L1-L7)認証に加えて
+次のような出力が追加されます（イメージ）。
+
+```
+## 🌐 ドメイン別
+| ドメイン | 平均成功率 | 平均combined | ゲート |
+|---|---|---|---|
+| security | 72.0% | 68.4 | ✅ 合格 |
+| general  | 81.0% | 75.2 | ✅ 合格 |
+| writing  | 55.0% | 58.0 | ⚠️ experimental (未較正) |
+| medical  | 66.7% | 63.1 | 📖 reference (参考値) |
+
+⚖️ バランス指数: 71.2  (coding + security + general の調和平均。writing/medicalは既定除外)
+
+🩺 医療 正答率内訳: 全体 66.7% (16/24)
+  - med_basic: 85.7% (6/7)
+  - med_std:   63.6% (7/11)
+  - med_hard:  50.0% (3/6)
+  ※ 5択MCQのチャンス正答率は約20%。臨床的妥当性の保証ではなく参考値。
+```
+
+読み方：
+
+| 項目 | 意味 |
+|---|---|
+| **ドメイン別テーブル** | `certify_domains`（config.yaml）のしきい値に対する合否。coding tierの合否とは独立に判定される |
+| **バランス指数** | 測定済みドメイン（coding含む・writing/medicalは既定除外）の平均combinedの調和平均。1ドメインだけ極端に弱いモデルは算術平均より大きく下がる — 「一芸特化」を見抜く指標 |
+| **医療正答率内訳** | 全体 + 難易度別(med_basic/med_std/med_hard)。チャンス正答率(5択≈20%)との比較で「本当に知識があるか」を判断する材料にする。**参考値**であり臨床適用の根拠にはしない |
+
+`report.md` にも同内容の「🌐 ドメイン別」節が追加されます（`llmbench run --with-sec ...` 等の実行後、
+`--output` 先の `*_report.md` を確認してください）。
+
+> writing/medical のゲート閾値は暫定（未較正）です。判定基準は `llmbench/certify.py` の
+> `DEFAULT_DOMAIN_GATES` / `DEFAULT_MED_GATES`、または `config.yaml` の `certify_domains:` で調整できます。

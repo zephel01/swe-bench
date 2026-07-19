@@ -371,5 +371,112 @@ L6 の t053/t057/t060 を深掘り。敵対入力下で不変条件(ディレク
 | 決定的に捕捉する複合並行性 (デッドロック/競合/リーク) | t085-t092 (L7軸D) |
 | 敵対的パース・セキュリティ文脈・Unicode正規化 | t093-t100 (L7軸E) |
 | 天井評価帯 (grandmaster・現行モデル群の頭打ち検出) | t061-t100 (--with-l7) |
+| 検出・過検出への頑健性 (precision/recall/F1、デコイ) | s01-s04 (--with-sec、マルチドメイン) |
+| 指示追従・制約遵守 (IFEval式の機械検証) | g01-g03 (--with-gen、マルチドメイン) |
+| 文章品質 (rubric+judge、experimental) | w01-w02 (--with-write、マルチドメイン) |
+| 医療知識QA (日英対応、参考値) | m01-m24 (--with-med、マルチドメイン) |
 
 難易度が上がるほど「テストを通す」だけでなく「**正しい箇所だけを最小限に直す**」判断が要求され、機能スコアと品質スコアの乖離が観測しやすい構成になっている。
+
+---
+
+# 🌐 ドメインタスク — security / general / writing / medical
+
+コーディング以外の能力を測る**追加タスク群**。任意オプション `--with-sec/gen/write/med` で既定タスク
+に上乗せ、`--only-sec/gen/write/med` で単体実行できる（`--with-l6/l7` / `--only-l6/l7` と同体系）。
+`buggy_code/` `gold/` `tests/` は持たず、台帳レコードに `grader` と `domain` を指定する。採点は
+「共通の採点フロー」（冒頭の隠しpytestベースの4ステップ）ではなく **grader固有のロジック**で行われ、
+最終的に `(resolved: bool, quality: 0-100)` に正規化されて既存の pass@k / combined / usability /
+certify パイプラインへそのまま合流する。採点式・出力契約・validateのmock仕様の詳細は
+[📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) を参照。
+
+台帳レコードの共通形（`tasks.jsonl` のコーディングタスクと同じファイルではなく、ドメインごとに
+`tasks_sec.jsonl` / `tasks_gen.jsonl` / `tasks_write.jsonl` / `tasks_med.jsonl` に分離）:
+
+```json
+{"task_id":"s01","dir":"s01_name","grader":"detection","domain":"security","difficulty":"sec_medium","title":"..."}
+```
+
+## grader別ディレクトリ構成とgoldスキーマ
+
+| grader | ドメイン | ディレクトリの中身 | gold / 採点材料 |
+|---|---|---|---|
+| `detection` | security | `issue.md`/`issue_ja.md`（指示+解析対象のログ/コードを本文に含める）+ `gold.json` | `{"findings":[{"id","cwe","any_of":[...],"keywords_all":[...]}]}`。`"findings": []` は**クリーンなデコイ**（gold所見ゼロ＝過検出を罰する） |
+| `constraint` | general | `issue.md`/`issue_ja.md` + `checks.json` + `gold_answer.md`（全チェックを通過する回答例、validate用） | `checks.json` はIFEval式のチェック配列。対応kind: `word_count`/`line_count`/`char_count`/`contains`/`not_contains`/`starts_with`/`ends_with`/`equals`/`regex`/`json_valid`/`json_path` |
+| `judge` | writing | `issue.md`/`issue_ja.md` + `rubric.json` + `gold_answer.md` | `rubric.json` = `hard_constraints`（決定的ゲート、`checks.json`と同種kind）+ `criteria`（採点観点・weight）+ `pass_score` |
+| `qa` | medical | `issue.md`/`issue_ja.md` + `gold.json` | `{"mode":"mcq","answer":"C"}`（選択肢一致）または `{"mode":"keyword","all":[...],"any":[...]}`（`all`を全て・`any`を1つ以上含む）。gold keywordは**日英両方**を収録し `--lang ja` の日本語回答でも正しく採点される |
+
+## security (s01–s04) — `detection` grader
+
+出力契約: モデルは `--- FINDINGS ---` の後に `{"type","location","evidence"}` の配列を出す。
+gold の `any_of`/`keywords_all` にマッチした予測が真陽性(TP)、goldをカバーしない予測は偽陽性(FP)。
+precision/recall/F1 で採点し `resolved = F1 ≥ pass_f1`（既定0.67）。
+
+| ID | ディレクトリ | 難易度 | 内容 |
+|---|---|---|---|
+| s01 | s01_pathtrav | sec_medium | Path traversal in file reader |
+| s02 | s02_sqli | sec_medium | SQL injection in user lookup |
+| s03 | s03_bruteforce | sec_hard | SSH brute-force in auth log |
+| s04 | s04_clean | sec_medium | Clean configuration loader（**デコイ**: gold `findings` が空。何も検出しない = precision満点、1件でも誤検出すればF1=0で不合格になり、過検出への頑健性を測る） |
+
+## general (g01–g03) — `constraint` grader
+
+出力契約: モデルは `--- ANSWER ---` の後に回答本文を出す（無ければ全文を回答とみなす）。
+`checks.json` の全チェック通過で `resolved=true`、通過数/総数×100が `quality`（IFEvalのinstruction-level accuracyに相当）。
+
+| ID | ディレクトリ | 難易度 | 内容 |
+|---|---|---|---|
+| g01 | g01_json_status | gen_easy | JSON status summary（`json_valid`/`json_path`/`contains`/`char_count` の組み合わせ） |
+| g02 | g02_five_bullets | gen_medium | Five exercise benefit bullets |
+| g03 | g03_formal_reply | gen_medium | Formal customer complaint reply |
+
+## writing (w01–w02) — `judge` grader（experimental）
+
+出力契約: `--- ANSWER ---` の後に文章本文。まず `hard_constraints` を決定的ゲートとして評価し、
+judgeモデルが設定されていれば `criteria` に基づき0–10点（`quality.judge.seeds`回の平均）で採点、
+`resolved = hard通過 かつ score ≥ pass_score`。judge未設定時（validate等）は `hard_constraints` のみで
+決定的に判定する。オラクルが無くrubric/judge依存のため **experimental** 扱い（L7と同様に未較正）。
+
+| ID | ディレクトリ | 難易度 | 内容 |
+|---|---|---|---|
+| w01 | w01_release_note | write_basic | Release note（hard_constraints: word_count 80–200 / criteria: clarity・coverage・tone、pass_score 7.0） |
+| w02 | w02_apology | write_basic | Customer apology email |
+
+## medical (m01–m24) — `qa` grader（reference value）
+
+薬理・循環器・救急/第一選択・内分泌・感染症・腎/生理・神経・小児・産婦人科・検査/中毒の10領域、
+難易度 med_basic 7問 / med_std 11問 / med_hard 6問。全問のゴールドは独立エージェントによる
+ファクトチェック済み。5択MCQのチャンス正答率は約20%であり、臨床的妥当性の保証ではなく
+**参考値**として扱う（`certify` の医療detail readoutで難易度別正答率が確認できる）。
+
+| ID | ディレクトリ | 難易度 | 内容 |
+|---|---|---|---|
+| m01 | m01_pharm_mcq | med_std | Pharmacology: proton-pump inhibitor MoA |
+| m02 | m02_diag_mcq | med_std | Diagnosis: SLE (anti-dsDNA) |
+| m03 | m03_firstline | med_basic | First-line: anaphylaxis (epinephrine) |
+| m04 | m04_physio | med_std | Physiology: ADH / aquaporin-2 |
+| m05 | m05_clopidogrel_moa | med_std | Mechanism of action of clopidogrel |
+| m06 | m06_acetaminophen_antidote | med_basic | Antidote for acetaminophen overdose |
+| m07 | m07_inferior_mi_artery | med_std | Culprit artery in inferior STEMI |
+| m08 | m08_hcm_diagnosis | med_hard | Exertional syncope with dynamic murmur diagnosis |
+| m09 | m09_anaphylaxis_firstline | med_basic | First-line drug in anaphylaxis |
+| m10 | m10_opioid_antidote | med_basic | Antidote for opioid overdose |
+| m11 | m11_dka_initial_therapy | med_std | Initial therapy in diabetic ketoacidosis |
+| m12 | m12_primary_aldosteronism | med_hard | Resistant hypertension with hypokalemia diagnosis |
+| m13 | m13_lyme_firstline | med_std | First-line oral antibiotic for early Lyme disease |
+| m14 | m14_pasteurella_bite | med_hard | Organism in rapidly progressive cat-bite cellulitis |
+| m15 | m15_rta | med_hard | Distal (type 1) renal tubular acidosis |
+| m16 | m16_ascendinglimb | med_std | Loop of Henle thick ascending limb |
+| m17 | m17_abducens | med_basic | Abducens (CN VI) palsy |
+| m18 | m18_sah | med_std | Subarachnoid hemorrhage |
+| m19 | m19_croup | med_basic | Croup (viral laryngotracheitis) |
+| m20 | m20_duodenalatresia | med_std | Duodenal atresia (double bubble) |
+| m21 | m21_eclampsia | med_std | Eclampsia seizure management |
+| m22 | m22_molarpregnancy | med_hard | Hydatidiform (molar) pregnancy |
+| m23 | m23_nac | med_basic | Acetaminophen overdose antidote |
+| m24 | m24_ethyleneglycol | med_hard | Ethylene glycol poisoning |
+
+> 検証: `llmbench validate --only-sec|gen|write|med` が全てPASS（gold全成功・broken全失敗、LLM不要）。
+> 採点式・出力契約・validateのmock仕様（`mock_gold`/`mock_broken`）の詳細は
+> [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) を参照。運用手順は `USAGE.md` の16-17章、
+> config・certify出力の仕様は `MANUAL.md` の10章を参照。
