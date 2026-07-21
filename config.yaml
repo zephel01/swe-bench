@@ -27,6 +27,28 @@ models:
     max_tokens: 4096
     timeout: 600
 
+  # ── Alibaba Cloud (Model Studio) Qwen 有料プラン (token-plan) ──
+
+  qwen-coding:
+    type: openai
+    base_url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    model: "qwen3.7-max"   # 非思考コーダー(推奨)。qwen3.7-max等の思考モデルはstream必須でllmbench非対応
+    api_key: "${DASHSCOPE_CODING_API_KEY}" 
+    temperature: 0.2
+    max_tokens: 24576                # reasoning出力に備え大きめ
+    timeout: 600
+    transient_retries: 0
+
+  # ── z.ai GLM Coding Plan ────────────────────────────────────────
+  glm-coding:
+    type: openai
+    base_url: "https://api.z.ai/api/coding/paas/v4"   # Coding Plan専用のOpenAI互換パス
+    model: "glm-4.7"                 # 代替: glm-4.7
+    api_key: "${ZAI_API_KEY}"
+    temperature: 0.2
+    max_tokens: 24576
+    timeout: 600
+
   # 参照モデル (compareのアンカー用)。APIキーは環境変数で渡すこと。
   # 使い方: export OPENAI_API_KEY=sk-... して `llmbench run --model ref-gpt`
   ref-gpt:

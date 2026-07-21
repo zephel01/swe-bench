@@ -1,3 +1,27 @@
+# 🔁 通信リトライ: OpenAI互換クライアントに transient error retry
+
+QwenCloud等クラウドAPIで単発の `Read timed out` / `Connection reset` が起きた際、
+生成が **1回で失点扱いになる問題** を修正しました。
+
+| 追加/変更 | 内容 |
+|---|---|
+| 🔁 `llmbench/clients/openai_compat.py` | 通信起因の一時的失敗 (`ConnectionError` / `Timeout` / `ChunkedEncodingError` / `ConnectionResetError`) を指数バックオフで再試行。既定 2 回リトライ (合計 3 回試行)、初回遅延 2 秒 (2s → 4s)。HTTP 4xx/5xx や JSON パースエラーは retry しない (原因が呼び出し側にあり retry しても直らない)。 |
+| ⚙️ `config.yaml` | `transient_retries` / `transient_backoff` を model 別に上書き可能 (既定 2 / 2.0)。既存 config は変更不要 (デフォルト有効)。 |
+| 📝 実装 | 既存 `_generate` を `_post_once` に rename、新しい `_generate` は retry ラッパー。既存 `LLMClient.generate` の呼び出し規約は完全互換。 |
+
+**背景**: L7 v2 の実測較正 (qwen-coding, 2026-07-21) で 16 タスク中 **3 タスク** が
+`HTTPSConnectionPool ... Read timed out (read timeout=600)` で失点。これらは
+モデル要因ではなく Alibaba Cloud API 側の単発通信断であり、runs=1 での失点として
+扱うと実力評価にノイズが乗る。retry 追加後は 1 タスクの生成が最大 3 回試行される
+(既定)。
+
+**検証**: syntax OK。既存の `openai_compat.py` の呼び出し規約 (base.py `LLMClient.generate`)
+との互換性維持。retry ログは stderr に出力 (`⚠️ transient error on qwen-coding
+(attempt 1/3): ReadTimeout: ... — retry in 2.0s`)。
+
+---
+
+
 # 🆕 マルチドメイン評価 — security / general / writing / medical (pluggable grader)
 
 コーディング専用だった評価を、**採点器(grader)を差し替え可能**にして他能力へ横展開しました。

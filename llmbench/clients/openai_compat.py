@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 import requests
 
@@ -12,6 +13,15 @@ from .base import GenerationResult, LLMClient, expand_env
 # 後方互換: 旧APIを参照しているコード向けエイリアス (未設定時の挙動は
 # 「空文字を返す」から「ValueError」に変更されている点に注意)
 _expand_env = expand_env
+
+# 通信起因の一時的失敗 (実測: QwenCloud で Read timeout が単発発生する)。
+# HTTP 4xx/5xx はビジネスロジック側で扱うのでここには含めない。
+_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+    ConnectionResetError,
+)
 
 
 def fetch_served_model(base_url: str, api_key: str | None = None,
@@ -63,6 +73,11 @@ class OpenAICompatClient(LLMClient):
         self.api_key = expand_env(
             cfg.get("api_key", "sk-local"), where=f"models.{name}.api_key"
         )
+        # 通信リトライ設定: 通信起因の一時的失敗のみ、指数バックオフで再試行
+        # 既定 2 回 (合計 3 回試行)。config の transient_retries で上書き可能。
+        # HTTP 4xx/5xx はここでは retry しない (呼び出し側で扱う)。
+        self.transient_retries = int(cfg.get("transient_retries", 2))
+        self.transient_backoff = float(cfg.get("transient_backoff", 2.0))
         # model: auto / 空 のときはサーバのロード中モデルを自動採用する
         raw_model = (
             expand_env(cfg.get("model", ""), where=f"models.{name}.model") or ""
@@ -83,7 +98,8 @@ class OpenAICompatClient(LLMClient):
         else:
             self.model = raw_model
 
-    def _generate(self, system: str, user: str) -> GenerationResult:
+    def _post_once(self, system: str, user: str) -> GenerationResult:
+        """1回だけ /chat/completions を叩いて GenerationResult を返す (retryなし)."""
         resp = requests.post(
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -98,7 +114,12 @@ class OpenAICompatClient(LLMClient):
             },
             timeout=self.timeout,
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            body = (resp.text or "").strip().replace("\n", " ")
+            raise RuntimeError(
+                f"{resp.status_code} {resp.reason} from "
+                f"{self.base_url}/chat/completions: {body[:500]}"
+            )
         data = resp.json()
         usage = data.get("usage", {}) or {}
         return GenerationResult(
@@ -107,3 +128,30 @@ class OpenAICompatClient(LLMClient):
             completion_tokens=usage.get("completion_tokens"),
             raw=data,
         )
+
+    def _generate(self, system: str, user: str) -> GenerationResult:
+        """通信起因の一時的失敗を指数バックオフで再試行する ``_post_once`` ラッパ.
+
+        再試行対象は ``_TRANSIENT_ERRORS`` のみ (ConnectionError / Timeout /
+        ConnectionResetError / ChunkedEncodingError)。HTTP 4xx/5xx や JSON パース
+        エラーは retry しない (原因が呼び出し側にあるため retry しても直らない)。
+        """
+        last_exc: BaseException | None = None
+        for attempt in range(self.transient_retries + 1):
+            try:
+                return self._post_once(system, user)
+            except _TRANSIENT_ERRORS as e:
+                last_exc = e
+                if attempt < self.transient_retries:
+                    delay = self.transient_backoff * (2 ** attempt)
+                    print(
+                        f"⚠️ transient error on {self.name} "
+                        f"(attempt {attempt + 1}/{self.transient_retries + 1}): "
+                        f"{type(e).__name__}: {str(e)[:120]} — retry in {delay:.1f}s",
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay)
+                    continue
+                break
+        assert last_exc is not None
+        raise last_exc
