@@ -30,6 +30,7 @@
 8. [変更ファイル早見表](#8-変更ファイル早見表)
 9. [追加サブシステム（信頼性・usability・比較・モデル解決）](#9-追加サブシステム信頼性usability比較モデル解決)
 10. [マルチドメイン評価（グレーダー拡張）](#10-マルチドメイン評価グレーダー拡張)
+11. [クラウドLLM（ホスト型API）の評価手順](#11-クラウドllmホスト型apiの評価手順)
 
 ---
 
@@ -455,3 +456,165 @@ certify_domains:
 - 医療タスク（m01–m24）は薬理/循環器/救急・第一選択/内分泌/感染症/腎・生理/神経/小児/産婦人科/検査・中毒の
   10領域、難易度 med_basic 7問 / med_std 11問 / med_hard 6問。全問ゴールドは独立にファクトチェック済み。
 - ドメインタスクの一覧・ディレクトリ構成・goldスキーマは `TASKS.md` を参照。
+
+---
+
+## 11. クラウドLLM（ホスト型API）の評価手順
+
+本書の他章はローカルLLM（llama.cpp / Ollama）を主眼に書いているが、**OpenAI互換のホスト型API**も
+**同一パイプライン**で評価できる。採点側（patchパース → sandbox pytest → ruff/radon → combined）は
+モデルの所在に依存しないため、`certify` / `compare` / pass@k / usability もそのまま使える。
+
+ローカルとの違いは実質 **3点**：**①実モデル名の明示**・**②APIキー**・**③コストとレート制限**。
+クライアント実装は `type: openai`（`openai_compat.OpenAICompatClient`、Bearer認証 + `/v1/chat/completions`）で共通。
+
+> クラウド生成物の扱い: artifacts の `llm_output.txt` には**プロンプト全文**が保存される。`.gitignore`（4.2）で
+> `results/` を除外し、社外APIへ送る内容がタスクissueに限られる前提で運用する。
+
+### 11.1 共通手順（config方式・推奨）
+
+**認証が必要なクラウドAPIはこの方式を使う。** APIキーは `${VAR}` で環境変数から展開され、コードにも
+結果ファイルにも平文で残らない。
+
+1. `config.yaml` の `models:` にエントリを追加（`base_url` は `/v1` などOpenAI互換パスまで含める。`model` は
+   **実モデル名を明示**し `auto` にしない）。
+2. APIキーを `export` で環境変数に渡す（**configへ直書きしない**）。`${VAR}` 未設定時は明確なエラーで停止する。
+3. `llmbench run --model <キー名>` で実行。`--runs` / `--tasks` / `--lang` / `--with-*` はローカルと同じく併用可。
+   結果ファイル名は `--model` のキー名で決まる。
+
+> ⚠️ `--client-type openai --base-url ...` の直指定（config編集レス）は、**`api_key` が既定の `sk-local`
+> ダミーになる**ため認証付きクラウドでは 401 になる。認証が要るクラウドは必ず config 方式（`api_key: ${VAR}`）を使う。
+
+### 11.2 プロバイダ別サンプル
+
+いずれも `type: openai`（OpenAI互換）で接続する。**Coding Plan は専用エンドポイント＋専用キー**を使わないと
+プラン枠ではなく従量課金に落ちるため、下表のとおり厳密に合わせること。
+
+| 項目 | Alibaba Cloud (Model Studio) Qwen 有料プラン (token-plan) | z.ai GLM Coding Plan |
+|---|---|---|
+| base_url (OpenAI互換) | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`（例は ap-southeast-1。リージョンは発行先に合わせる） | `https://api.z.ai/api/coding/paas/v4` |
+| 主モデル名 | `qwen3.7-max` | `glm-5.2` |
+| 代替モデル | `qwen3.7-plus` / `qwen3.6-plus` / `qwen3.6-flash`（qwen3-coder系はToken Plan非提供） | `glm-4.7` / `glm-5.1` |
+| APIキー | **プラン専用キー `sk-sp-xxxx`**（通常の `sk-xxxx` ではない） | z.ai APIキー |
+| キー発行元 | Model Studio コンソール → プランページ | z.ai コンソール |
+| 誤設定時の挙動 | 通常キー/通常エンドポイントだと従量課金に落ちる | 通常 `paas/v4` / `anthropic` は別課金・別プロトコル |
+
+`config.yaml` サンプル（`models:` に追記）:
+
+```yaml
+models:
+  # ── Alibaba Cloud (Model Studio) Qwen3 Coding Plan ──────────────
+  qwen-coding:
+    type: openai
+    base_url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"  # 発行リージョンの token-plan 専用ドメイン (compatible-mode/v1)
+    model: "qwen3.7-max"        # Token Plan提供モデル。代替: qwen3.7-plus / qwen3.6-plus / qwen3.6-flash
+    api_key: "${DASHSCOPE_CODING_API_KEY}"   # ★プラン専用キー sk-sp-xxxx（通常の sk-xxxx ではない）
+    temperature: 0.2
+    max_tokens: 24576                # reasoning出力に備え大きめ
+    timeout: 600
+
+  # ── z.ai GLM Coding Plan ────────────────────────────────────────
+  glm-coding:
+    type: openai
+    base_url: "https://api.z.ai/api/coding/paas/v4"   # Coding Plan専用のOpenAI互換パス
+    model: "glm-5.2"                 # 代替: glm-4.7
+    api_key: "${ZAI_API_KEY}"
+    temperature: 0.2
+    max_tokens: 24576
+    timeout: 600
+```
+
+環境変数（キーは `export` で渡す。config直書き禁止）:
+
+```bash
+export DASHSCOPE_CODING_API_KEY=sk-sp-...   # Model Studio コンソール → プランページで発行
+export ZAI_API_KEY=...                        # z.ai APIキー
+```
+
+疎通確認 → 本測定:
+
+```bash
+# まず1タスク×1回で 課金・接続・キー を確認
+llmbench run --model qwen-coding --runs 1 --tasks t001
+llmbench run --model glm-coding  --runs 1 --tasks t001
+
+# 問題なければ本測定（pass@k / 成功率）
+llmbench run --model qwen-coding --runs 3
+llmbench run --model glm-coding  --runs 3
+```
+
+> [!NOTE]
+> z.ai は Claude Code 向けに **Anthropic互換エンドポイント**（`https://api.z.ai/api/anthropic`、
+> `ANTHROPIC_AUTH_TOKEN`）も提供するが、llmbench は OpenAIプロトコルのため上表の `coding/paas/v4` を使う。
+> モデル名・エンドポイント・キー形式はプラン改定で変わるため、**初回は必ずコンソールの最新表記で確認**すること
+> （本節の値は2026年時点の各社公式ドキュメント記載）。
+
+> [!IMPORTANT]
+> **DashScope の接続方式に注意（純正SDK ≠ OpenAI互換）。** Alibaba公式の Python 例
+> （`from dashscope import Generation` / `dashscope.base_http_api_url=".../api/v1"`）は **DashScope 純正SDK**
+> の呼び方で、`/api/v1` は独自プロトコルのパス。llmbench は OpenAI互換HTTP（`/chat/completions` + Bearer）で
+> 叩くため、**同じ `/api/v1` は使えない**。用途別に次のパスを使い分ける:
+>
+> | 接続方式 | base_url | キー | 用途 |
+> |---|---|---|---|
+> | 純正SDK | `https://dashscope-intl.aliyuncs.com/api/v1` | `sk-xxxx` | dashscope SDK専用（llmbench非対応） |
+> | OpenAI互換・一般 | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `sk-xxxx` | Coding Plan枠を使わず従量で測る |
+> | OpenAI互換・プラン専用 | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | `sk-sp-xxxx` | プラン枠で測る（本節の推奨・専用 maas ドメイン） |
+>
+> 一般API（従量・Coding Plan外）で測る場合の例。**`/api/v1` ではなく `compatible-mode/v1`** を指す:
+>
+> ```yaml
+>   qwen-general:
+>     type: openai
+>     base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"  # 純正SDKの /api/v1 とは別
+>     model: "qwen3.7-max"        # 一般APIなら qwen3-coder-plus 等コーダー系も選べる
+>     api_key: "${DASHSCOPE_API_KEY}"  # 通常キー sk-xxxx（Coding Plan枠は使わない）
+>     temperature: 0.2
+>     max_tokens: 24576
+>     timeout: 600
+> ```
+>
+> Anthropic互換（Claude Code 等のツール向け）は `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic/v1/messages`。llmbench は OpenAI互換のため使わない。
+
+> [!WARNING]
+> **モデルはプランの提供リストから選ぶ。** Token Plan が提供するのは `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-plus` / `qwen3.6-flash` / `glm-5.x` / `kimi-k2.x` / `deepseek-*` 等で、
+> **`qwen3-coder-plus` などコーダー専用モデルは Token Plan には無い**（指定すると 404）。汎用フラッグシップ `qwen3.7-max` 等を使う。
+> なお `enable_thinking=true` を明示した場合のみ OpenAI互換では `stream=true` が要求される。llmbench は `enable_thinking` を送らないため既定の非思考動作で通る（明示的に思考出力を測りたい場合のみクライアント改修が要る）。
+
+### 11.3 コスト・レート制限・信頼性
+
+有料APIでは**試行回数がそのまま費用**になる。次の順で調整する。
+
+| 項目 | 効果 | 目安 |
+|---|---|---|
+| `--runs N` | リクエスト数（≒費用）が N 倍。pass@k / 成功率の精度は上がる | 有料は 3 前後から。まず `--runs 1` で疎通 |
+| `--concurrency N` | 試行を N 並列で投げ総時間短縮 | プロバイダの**レート上限に合わせる**。429 が出たら下げる |
+| `max_tokens` | 上限が小さいと難タスクで生成途中停止 → `patch parse failed` | 非推論=4096 / 推論(reasoning)系=24576 以上 |
+| `timeout` | 混雑時の切断回避 | 長考モデルは 600 以上 |
+| `--tasks` で絞る | 対象タスクを限定して費用・時間を圧縮 | 較正・疎通は一部tierだけ実行 |
+
+- 手順: **`llmbench validate`（LLM不要）でパイプライン疎通 → `--runs 1 --tasks <少数>` でキー・課金確認 → 本測定**。
+- レート制限(429)はタスク単位で `fail_reason` に出る。多発時は `--concurrency` を下げる。
+- クラウドは**サーバ側の並列起動設定は不要**（プロバイダが捌く）。`--concurrency` の上げ過ぎだけ 429 に注意。
+
+### 11.4 参照アンカーとしての併走（`compare`）
+
+ローカルモデルの位置づけを見るため、クラウドの強モデルを**参照アンカー**として併走させ、`compare` で
+1枚に並べる（9.3）。
+
+```bash
+export OPENAI_API_KEY=sk-...
+llmbench run --model local-openai --output results     # 手元のローカルモデル
+llmbench run --model qwen-coding  --output results     # クラウド参照アンカー
+llmbench compare results/*_results.json                # → comparison_<stamp>.md
+```
+
+### 11.5 チェックリスト
+
+- [ ] `base_url` に `/v1`（またはプロバイダ指定のOpenAI互換パス）を含めたか
+- [ ] `model` を**実モデル名**で固定したか（`auto` にしていないか）
+- [ ] **プラン専用キー**（Qwen=`sk-sp-`）と**専用エンドポイント**を使ったか（従量課金への誤流入回避）
+- [ ] APIキーを `${VAR}` + `export` で渡したか（configへ直書きしていないか）
+- [ ] `--runs 1 --tasks <少数>` で費用と疎通を確認してから本測定に移ったか
+- [ ] `--concurrency` をプロバイダのレート上限内に収めたか（429が出ていないか）
+- [ ] 推論(reasoning)系モデルで `max_tokens` を十分大きく取ったか（途中停止による parse 失敗の回避）
