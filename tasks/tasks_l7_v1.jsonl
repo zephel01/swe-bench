@@ -1,0 +1,40 @@
+{"task_id": "t061", "dir": "t061_welford_variance", "difficulty": "grandmaster", "title": "sample variance collapses for large-offset data"}
+{"task_id": "t062", "dir": "t062_logsumexp", "difficulty": "grandmaster", "title": "log_sum_exp overflows on large or very negative inputs"}
+{"task_id": "t063", "dir": "t063_quadratic_roots", "difficulty": "grandmaster", "title": "small root of the quadratic is lost when b dominates a and c"}
+{"task_id": "t064", "dir": "t064_money_allocate", "difficulty": "grandmaster", "title": "allocated cents do not sum back to the total"}
+{"task_id": "t065", "dir": "t065_ema_bias", "difficulty": "grandmaster", "title": "exponential moving average is biased toward zero at the start"}
+{"task_id": "t066", "dir": "t066_recurrence", "difficulty": "grandmaster", "title": "integral(n) returns huge or negative values once n grows"}
+{"task_id": "t067", "dir": "t067_geometric_mean", "difficulty": "grandmaster", "title": "geometric mean overflows/underflows for extreme magnitudes"}
+{"task_id": "t068", "dir": "t068_haversine", "difficulty": "grandmaster", "title": "great-circle distance collapses to zero for nearby points"}
+{"task_id": "t069", "dir": "t069_saga_compensation", "difficulty": "grandmaster", "title": "A failed compensation strands earlier saga steps' resources"}
+{"task_id": "t070", "dir": "t070_nested_txn_kv", "difficulty": "grandmaster", "title": "Rolling back an outer transaction keeps a committed child's writes"}
+{"task_id": "t071", "dir": "t071_wal_replay", "difficulty": "grandmaster", "title": "WAL recovery applies writes of uncommitted interleaved transactions"}
+{"task_id": "t072", "dir": "t072_undo_redo", "difficulty": "grandmaster", "title": "Redo after new edits resurrects abandoned commands"}
+{"task_id": "t073", "dir": "t073_inventory_reservation", "difficulty": "grandmaster", "title": "Expired reservations can still be confirmed, corrupting stock counts"}
+{"task_id": "t074", "dir": "t074_reorder_buffer", "difficulty": "grandmaster", "title": "Out-of-order events applied across a gap; the missing one is lost"}
+{"task_id": "t075", "dir": "t075_state_machine", "difficulty": "grandmaster", "title": "A failed transition side effect still advances the state machine"}
+{"task_id": "t076", "dir": "t076_optimistic_lock", "difficulty": "grandmaster", "title": "commit_all is not atomic: a late conflict leaves earlier writes applied"}
+{"task_id": "t077", "dir": "t077_job_scheduler", "difficulty": "grandmaster", "title": "recurring jobs run out of order and fire at the wrong time"}
+{"task_id": "t078", "dir": "t078_pagination", "difficulty": "grandmaster", "title": "filtered pages come back short and mis-ordered"}
+{"task_id": "t079", "dir": "t079_serializer", "difficulty": "grandmaster", "title": "round-tripping records corrupts pipes and false booleans"}
+{"task_id": "t080", "dir": "t080_cellref", "difficulty": "grandmaster", "title": "spreadsheet cell ranges expand to the wrong cells"}
+{"task_id": "t081", "dir": "t081_table_formatter", "difficulty": "grandmaster", "title": "rendered tables don't line up and carry trailing spaces"}
+{"task_id": "t082", "dir": "t082_diffpatch", "difficulty": "grandmaster", "title": "context views drop a line and lose the trailing newline"}
+{"task_id": "t083", "dir": "t083_aggregate", "difficulty": "grandmaster", "title": "group averages merge wrong keys and get truncated"}
+{"task_id": "t084", "dir": "t084_cidr", "difficulty": "grandmaster", "title": "CIDR ranges are off by one and exclude their endpoints"}
+{"task_id": "t085", "dir": "t085_lock_order", "difficulty": "grandmaster", "title": "opposite-direction transfers deadlock under concurrency"}
+{"task_id": "t086", "dir": "t086_lost_wakeup", "difficulty": "grandmaster", "title": "a woken consumer pops from an empty buffer"}
+{"task_id": "t087", "dir": "t087_dcl_init", "difficulty": "grandmaster", "title": "lazily-initialized singleton is built more than once"}
+{"task_id": "t088", "dir": "t088_cancel_leak", "difficulty": "grandmaster", "title": "cancelled job leaks the runner's concurrency bookkeeping"}
+{"task_id": "t089", "dir": "t089_toctou_pool", "difficulty": "grandmaster", "title": "resource pool hands the same id to two callers"}
+{"task_id": "t090", "dir": "t090_future_double_set", "difficulty": "grandmaster", "title": "single-assignment result cell accepts two winners"}
+{"task_id": "t091", "dir": "t091_gather_leak", "difficulty": "grandmaster", "title": "a failed job leaves its sibling jobs running"}
+{"task_id": "t092", "dir": "t092_rw_reentrant", "difficulty": "grandmaster", "title": "reentrant read lock deadlocks when a writer is waiting"}
+{"task_id": "t093", "dir": "t093_path_canon", "difficulty": "grandmaster", "title": "safe path join accepts double-encoded, backslash and fullwidth traversal"}
+{"task_id": "t094", "dir": "t094_header_crlf", "difficulty": "grandmaster", "title": "header value sanitizer misses unicode line separators"}
+{"task_id": "t095", "dir": "t095_confusable_label", "difficulty": "grandmaster", "title": "label validator accepts mixed-script confusable names"}
+{"task_id": "t096", "dir": "t096_nested_escape", "difficulty": "grandmaster", "title": "search link mis-encodes query across url and html contexts"}
+{"task_id": "t097", "dir": "t097_querystring", "difficulty": "grandmaster", "title": "query parser mishandles plus, percent escapes and duplicate keys"}
+{"task_id": "t098", "dir": "t098_redos_path", "difficulty": "grandmaster", "title": "label-path validator has catastrophic backtracking", "perf_timeout": 30}
+{"task_id": "t099", "dir": "t099_tar_slip", "difficulty": "grandmaster", "title": "archive extractor accepts members that escape via prefix and backslash"}
+{"task_id": "t100", "dir": "t100_format_inject", "difficulty": "grandmaster", "title": "template renderer exposes object internals via format fields"}
