@@ -14,6 +14,7 @@
 1. [セットアップ](#1-セットアップ)
 2. [まず自己検証する (`validate`)](#2-まず自己検証する-validate)
 3. [モデルを設定する (`config.yaml` / `model: auto`)](#3-モデルを設定する-configyaml--model-auto)
+    - [3.5 サブスクCLIで実行する (`type: cli`)](#35-サブスクcliで実行する-type-cli--claude--codex--grok-の定額枠)
 4. [モデルを選ぶ (`models` / Ollama動的選択)](#4-モデルを選ぶ-models--ollama動的選択)
 5. [ベンチマーク実行 (`run`)](#5-ベンチマーク実行-run)
 6. [信頼性を測る (`--runs` / pass@k)](#6-信頼性を測る---runs--passk)
@@ -113,6 +114,52 @@ usability:                              # ティア分類のしきい値
 > 差し替える → そのまま `llmbench run` するだけ。llmbench が `/v1/models` から実モデル名を
 > 取得し、レポート/結果ファイルもその実名でラベルします（`.gguf` は自動除去）。
 > APIキーは `${OPENAI_API_KEY}` のように環境変数で渡せます（configに直書き不要）。
+
+---
+
+## 3.5 サブスクCLIで実行する (`type: cli` — Claude / Codex / Grok の定額枠)
+
+Claude Pro/Max・ChatGPT (Codex)・SuperGrok などのチャットサブスクは OpenAI互換API を
+公式提供しませんが、**各社の公式CLIはサブスク認証のままヘッドレス実行**できます。
+`type: cli` はそれを subprocess で叩き、従量APIキーなし (定額枠) でベンチを回す仕組みです。
+
+```yaml
+models:
+  claude-sub:
+    type: cli
+    preset: claude        # claude -p "<prompt>" --output-format json
+  codex-sub:
+    type: cli
+    preset: codex         # codex exec "<prompt>" --output-last-message <file>
+  grok-sub:
+    type: cli
+    preset: grok          # grok exec "<prompt>"
+```
+
+```bash
+# 前提: 各CLIをインストールし、一度対話起動してサブスクアカウントでログイン済みであること
+llmbench run --model claude-sub --tasks t001,t002     # まず小さく疎通確認
+llmbench run --model codex-sub --runs 1
+```
+
+設定キー: `model` (CLIに渡すモデル名。例 claude の `sonnet`)、`extra_args` (追加フラグ)、
+`timeout` (既定600秒。エージェントは遅いので 1200 推奨)、`env` (追加環境変数、`${VAR}` 展開可)。
+任意のCLIは `preset: custom` + `command: [...]` + `prompt_via: arg|stdin` +
+`parse: stdout|claude_json|last_message_file` で接続できます。
+
+> ⚠️ **読み方の注意**
+> - 計測対象は素のモデルではなく **「エージェント製品 (CLI+モデル)」** です。CLI側の
+>   システムプロンプト・自律リトライが乗るため、`type: openai` の素の補完と同列比較せず、
+>   `compare` では「エージェント枠」として分けて解釈してください。
+> - **temperature は制御できません**。`--runs N` の `sample_temp` は無視されます (警告表示)。
+>   pass@k は「CLI既定サンプリングでの再現性」の意味になります。
+> - サブスクには **5時間ウィンドウ/週次のレート枠** があります。枠超過時はCLIがエラーを
+>   返し該当タスクが失点になるため、大規模実行は `--only-l6` 等で分割し、後日
+>   `certify --merge` で統合するのが安全です。
+> - 各生成は**空の一時ディレクトリ**を作業ディレクトリにして実行されます (エージェントが
+>   手元のリポジトリを読み書きしないための安全策)。
+> - OAuthトークンを抜き出して API を直叩きする手法は各社の規約違反です。
+>   本機能は「公式CLIをそのまま実行する」方式のみを実装しています。
 
 ---
 

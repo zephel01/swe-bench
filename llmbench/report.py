@@ -108,11 +108,13 @@ def render_markdown(run) -> str:
     n = len(run.results)
     n_resolved = sum(r.resolved for r in run.results)
     multi = getattr(run, "multi_run", False)
+    served = getattr(run, "served_model", "")
     lines = [
         f"# llmbench レポート: {run.model}",
         "",
         f"Issue言語: `{run.issue_lang}` / タスク数: {n}"
-        + (f" / 試行: ×{run.runs}" if multi else ""),
+        + (f" / 試行: ×{run.runs}" if multi else "")
+        + (f" / 実行モデル: `{served}`" if served and served != run.model else ""),
         "",
         "## サマリ",
         "",

@@ -1,3 +1,31 @@
+# 🆕 サブスクCLIバックエンド (`type: cli`) — Claude / Codex / Grok を定額枠で実行
+
+Claude Pro/Max・ChatGPT (Codex)・SuperGrok などのチャットサブスクは OpenAI互換APIを
+提供しないため従来は測れませんでしたが、**公式CLIのヘッドレスモードを subprocess で
+叩く**ことで、従量APIキーなし (定額枠) でベンチを回せるようにしました。
+
+| 追加/変更 | 内容 |
+|---|---|
+| 🆕 `llmbench/clients/cli_agent.py` | `CliAgentClient` (type: `cli`)。プリセット `claude` (`claude -p --output-format json`, stdin渡し, JSONパース) / `codex` (`codex exec --skip-git-repo-check --output-last-message <file>`) / `grok` (`grok exec`) / `custom` (任意コマンド)。生成ごとに**空の一時cwd**で実行しエージェントに手元のファイルを触らせない。非0終了・タイムアウト・バイナリ未発見はインストール手順つきの明確なエラー |
+| ⚙️ `config.yaml` | `claude-sub` / `codex-sub` / `grok-sub` プリセット追加。キー: `model` / `extra_args` / `env` (`${VAR}`展開) / `prompt_via` / `parse` / `timeout` |
+| ⚠️ temperature | CLIでは制御不可。runner が runs>1 で `sample_temp` を上書きした場合、**初回生成時に1度だけ警告**を stderr に表示 (無視される旨) |
+| 🔎 実行モデルの検出・記録 | CLIの既定モデルで実行すると「どのモデルで叩いたか」が分からない問題に対応。claude は JSON応答の `modelUsage` (出力トークン最大のモデルを採用)、codex/grok はバナーの `model:` 行から検出し、**初回に `🔎 実行モデル: ...` を表示**(変化時は⚠️再警告)。検出名は `results.json` の `served_model` とレポート冒頭 (`実行モデル: ...`) に記録される (`model: auto` の検出名も同フィールドに記録) |
+| 🧪 `tests/test_cli_agent.py` | 22テスト追加 (偽CLIで組み立て・stdin/arg渡し・claude JSON / codex last-message / stdout パース・実行モデル検出・異常系・警告)。実CLI不要 |
+| 📝 `USAGE.md` 3.5 / `README.md` | 使い方と**読み方の注意** (エージェント込み計測・temperature固定・サブスクのレート枠と `certify --merge` 分割運用・OAuthトークン直叩きは規約違反) |
+
+**背景**: 定額プラン (Claude Max 等) の枠でベンチを回したいという運用ニーズ。
+GLM Coding Plan / Qwen token-plan と違い、Claude / OpenAI / xAI はサブスクに
+OpenAI互換エンドポイントを付けないため、公式CLIのヘッドレス実行が正攻法。
+なお計測対象は素のモデルではなく「エージェント製品 (CLI+モデル)」になる点に注意
+(`type: openai` の素の補完と同列比較しない)。
+
+**検証**: `pytest tests/` 61 passed (既存39 + 新規22)。`ruff check` クリーン。
+実機疎通済み: `llmbench run --model claude-sub --tasks t001,t002` → 2/2 RESOLVED。
+`llmbench validate` (mock経路) 影響なし。既存クライアントの呼び出し規約は不変更。
+
+---
+
+
 # 🔁 通信リトライ: OpenAI互換クライアントに transient error retry
 
 QwenCloud等クラウドAPIで単発の `Read timed out` / `Connection reset` が起きた際、

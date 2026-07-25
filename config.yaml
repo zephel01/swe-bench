@@ -49,6 +49,69 @@ models:
     max_tokens: 24576
     timeout: 600
 
+  # ── サブスクCLI (type: cli) — 定額チャットプラン枠でヘッドレス実行 ──
+  # Claude Pro/Max・ChatGPT(Codex)・SuperGrok はOpenAI互換APIを公式提供しないが、
+  # 各社の公式CLIはサブスク認証のまま非対話実行できる。それを subprocess で叩く。
+  # ⚠️ 注意 (詳細は USAGE.md「サブスクCLIで実行する」):
+  #   - 計測対象は素のモデルではなく「エージェント製品 (CLI+モデル)」。
+  #     type: openai の素の補完と同列比較しないこと (compare では別枠扱い推奨)
+  #   - temperature 制御不可 → --runs N の sample_temp は無視される (警告表示)
+  #   - サブスクのレート枠 (5時間ウィンドウ/週次上限) に注意。
+  #     L6/L7込みの大規模実行は --only-l6 等で分割し certify --merge で統合を推奨
+  claude-sub:
+    type: cli
+    preset: claude          # 要: `claude` (Claude Code CLI) を Pro/Max でログイン済み
+    # model: "sonnet"       # 省略時はCLI既定。opus / sonnet / haiku など
+    # extra_args: ["--max-turns", "1"]   # ツール往復を抑えて素の生成に寄せる場合
+    timeout: 1200
+  codex-sub:
+    type: cli
+    preset: codex           # 要: `codex` (Codex CLI) を ChatGPTアカウントでログイン済み
+    # model: "gpt-5.3-codex"
+    timeout: 1200
+  grok-sub:
+    type: cli
+    preset: grok            # 要: `grok` (Grok Build CLI) を X/xAIアカウントでログイン済み
+    timeout: 1200
+  # 任意CLIは preset: custom で接続できる:
+  #   my-cli:
+  #     type: cli
+  #     preset: custom
+  #     command: ["mycli", "run", "--quiet"]
+  #     prompt_via: arg     # arg | stdin
+  #     parse: stdout       # stdout | claude_json | last_message_file
+
+  # ── Google AI Studio (Gemini) OpenAI互換 ─────────────────────
+  gemini-flash:
+    type: openai
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    model: "gemini-3.6-flash"
+    api_key: "${GEMINI_API_KEY}"
+    temperature: 0.2
+    max_tokens: 24576
+    timeout: 600
+    transient_retries: 2
+
+  gemini-flash-lite:
+    type: openai
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    model: "gemini-3.5-flash-lite"
+    api_key: "${GEMINI_API_KEY}"
+    temperature: 0.2
+    max_tokens: 24576
+    timeout: 600
+    transient_retries: 2
+
+  gemini-pro:
+    type: openai
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    model: "gemini-3.1-pro-preview"
+    api_key: "${GEMINI_API_KEY}"
+    temperature: 0.2
+    max_tokens: 24576
+    timeout: 600
+    transient_retries: 2
+
   # 参照モデル (compareのアンカー用)。APIキーは環境変数で渡すこと。
   # 使い方: export OPENAI_API_KEY=sk-... して `llmbench run --model ref-gpt`
   ref-gpt:

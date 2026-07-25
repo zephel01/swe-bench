@@ -95,6 +95,7 @@ class RunResult:
     results: list[TaskResult] = field(default_factory=list)
     runs: int = 1
     artifacts_dirname: str = ""   # save_run時に生成物ディレクトリ名が入る
+    served_model: str = ""        # 実際に応答したモデル名 (model:auto / type:cli の検出結果)
 
     @property
     def multi_run(self) -> bool:
@@ -331,6 +332,13 @@ class BenchmarkRunner:
             )
             run.results.append(tr)
             _log_task(progress, tr)
+
+        # 実際に応答したモデル名を記録:
+        #   model:auto → served_model_name / type:cli → 生成中にCLI応答から検出
+        detected = getattr(client, "detected_model", None)
+        run.served_model = served or detected or ""
+        if detected:
+            progress(f"実行モデル : {detected} (CLI応答から検出 → resultsに記録)")
         return run
 
     def _one_attempt(
@@ -611,6 +619,8 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
         "summary": summary,
         "results": [_lean(r) for r in run.results],
     }
+    if run.served_model:
+        payload["served_model"] = run.served_model
     json_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )

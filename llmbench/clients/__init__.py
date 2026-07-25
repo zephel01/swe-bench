@@ -1,4 +1,4 @@
-"""LLMクライアント層: OpenAI互換 / Ollama / Mock."""
+"""LLMクライアント層: OpenAI互換 / Ollama / サブスクCLI / Mock."""
 
 from .base import GenerationResult as GenerationResult
 from .base import LLMClient
@@ -6,6 +6,7 @@ from .openai_compat import OpenAICompatClient
 from .ollama import OllamaClient
 from .mock import MockClient
 from .multiagent import MultiAgentClient
+from .cli_agent import CliAgentClient
 
 
 def create_client(name: str, cfg: dict) -> LLMClient:
@@ -15,6 +16,8 @@ def create_client(name: str, cfg: dict) -> LLMClient:
         return OpenAICompatClient(name, cfg)
     if ctype == "ollama":
         return OllamaClient(name, cfg)
+    if ctype == "cli":
+        return CliAgentClient(name, cfg)
     if ctype == "mock":
         return MockClient(name, cfg)
     if ctype == "multiagent":

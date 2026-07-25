@@ -28,7 +28,7 @@
 - 🎓 **使えるライン認証 (`certify`)** — 難易度を tier(L1-L7) にマップし、tierごとの合格判定で「ここまでクリアできれば使える」を提示。**L4(expert)独立合格＝実務投入ライン**。最上位帯の頭打ちを測る **L7(grandmaster)** は天井評価帯。分割実行した複数 results.json は `certify --merge` で1つの認証に統合可
 - 🌐 **マルチドメイン評価** — コーディング以外も測る **pluggable grader**。**detection**(脆弱性/ログ検出＝F1採点＋過検出デコイ)・**constraint**(指示追従＝IFEval式の機械検証)・**judge**(創作＝rubric採点)・**qa**(医療QA＝日英アンサーキー)。`--with-sec/gen/write/med` で上乗せ、`certify` はドメイン別ゲート＋**バランス指数**(一芸特化を炙り出す)を出力。設計は [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md)
 - ⚖️ **複合スコア** — 動かないコードは0点。動くコードを成功率と品質で差別化
-- 🔌 **接続自在** — OpenAI互換API (llama.cpp / LM Studio / vLLM) と Ollama 両対応。**`model: auto`** でサーバのロード中モデルを自動採用（config編集不要）、Ollamaは**インストール済みモデルを動的に選択**
+- 🔌 **接続自在** — OpenAI互換API (llama.cpp / LM Studio / vLLM) と Ollama 両対応。**`model: auto`** でサーバのロード中モデルを自動採用（config編集不要）、Ollamaは**インストール済みモデルを動的に選択**。さらに **`type: cli`** で公式エージェントCLI (claude / codex / grok) を**サブスク定額枠のままヘッドレス実行**（従量APIキー不要。エージェント込み計測になる点は [USAGE 3.5](USAGE.md) 参照）
 - 🆚 **モデル横断比較** — `compare` で複数結果を1枚のランキング・マトリクスに。参照モデル(API)を併置して位置づけ
 - 🇯🇵 **日英issue同梱** — `--lang ja` で「language tax」(日本語指示による性能低下)を計測可能。医療QAなど日本語回答モデルも gold の日英許容語で正しく採点
 - ⚡ **速度計測** — タスク別レイテンシ / tok/s をレポートに自動記録
@@ -229,6 +229,10 @@ models:
     base_url: "https://api.openai.com/v1"
     model: "gpt-4o"
     api_key: "${OPENAI_API_KEY}"   # ${VAR} は環境変数から展開
+  claude-sub:              # サブスクCLI: claude -p をヘッドレス実行 (Pro/Max定額枠)
+    type: cli
+    preset: claude         # 他: codex / grok / custom。注意点は USAGE 3.5 参照
+    timeout: 1200
 
 run:
   issue_lang: en           # ja に切替で language tax 検証
