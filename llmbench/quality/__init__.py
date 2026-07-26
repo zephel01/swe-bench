@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,6 +10,9 @@ from .ruff_check import ruff_score
 from .complexity import complexity_score
 from .llm_review import llm_review_score
 from .sonar import sonar_score
+
+# weight<=0 の警告を出したレイヤー名 (プロセス内で1回だけ警告する)
+_WARNED_ZERO_WEIGHT: set[str] = set()
 
 
 @dataclass
@@ -26,7 +30,12 @@ def evaluate_quality(
 ) -> QualityResult:
     """変更ファイルに対して有効な品質レイヤーを実行し合成スコアを返す.
 
-    無効/失敗したレイヤーは重みを除外して再正規化する。
+    無効/失敗/weight<=0 のレイヤーは重みを除外して再正規化する
+    (weight の合計を1に揃える必要はない)。
+
+    `enabled: true` かつ `weight <= 0` のレイヤーは実行はされるが合成に寄与
+    しない。components には score が残りレポートには出てしまうため、
+    `weight_ignored: True` を立てて stderr に1回だけ警告する。
     """
     components: dict = {}
     weighted: list[tuple[float, float]] = []  # (score, weight)
@@ -48,6 +57,19 @@ def evaluate_quality(
         components[name] = {"enabled": True, "score": round(score, 1), **detail}
         if w > 0:
             weighted.append((score, w))
+            return
+        # enabled なのに weight<=0 → 実行コストを払って結果を捨てている状態。
+        components[name]["weight_ignored"] = True
+        if name not in _WARNED_ZERO_WEIGHT:
+            _WARNED_ZERO_WEIGHT.add(name)
+            print(
+                f"⚠️  quality.{cfg_key}: enabled: true ですが weight={w} のため"
+                f" スコアに寄与しません (実行はされ、レポートには表示されます)。"
+                f" quality.{cfg_key}.weight に正の値を設定してください。"
+                f" 重みは有効レイヤーだけで自動再正規化されるので、"
+                f" 合計を1に揃える必要はありません。",
+                file=sys.stderr,
+            )
 
     add("ruff", "ruff", lambda c: ruff_score(workspace, changed_files, c))
     add("complexity", "complexity",

@@ -31,8 +31,8 @@
 - 🔌 **接続自在** — OpenAI互換API (llama.cpp / LM Studio / vLLM) と Ollama 両対応。**`model: auto`** でサーバのロード中モデルを自動採用（config編集不要）、Ollamaは**インストール済みモデルを動的に選択**。さらに **`type: cli`** で公式エージェントCLI (claude / codex / grok) を**サブスク定額枠のままヘッドレス実行**（従量APIキー不要。エージェント込み計測になる点は [USAGE 3.5](USAGE.md) 参照）
 - 🆚 **モデル横断比較** — `compare` で複数結果を1枚のランキング・マトリクスに。参照モデル(API)を併置して位置づけ
 - 🇯🇵 **日英issue同梱** — `--lang ja` で「language tax」(日本語指示による性能低下)を計測可能。医療QAなど日本語回答モデルも gold の日英許容語で正しく採点
-- ⚡ **速度計測** — タスク別レイテンシ / tok/s をレポートに自動記録
-- 📦 **同梱タスク40個（+任意20＋任意40）** — L1 easy 5 / L2 medium 5 / L3 hard 10 / **L4 expert 12 / L5 frontier 8**。さらに **L6 architect 20問 (t041–t060) を任意オプション (`--with-l6`) で**、**L7 grandmaster 40問 (t061–t100) を `--with-l7` で追加** でき (併用可)、上位帯の天井効果を破る。**`--only-l6`/`--only-l7`** で既定40問を除いてL6/L7だけを単体実行し（分割運用向け）、後日 `certify --merge` で結果を統合することも可能。frontier/architect/grandmaster は複数ファイル・回帰罠・性能制約(perf_timeout)を含み、issueは**症状ベース**で原因診断を要求。外部依存なし(stdlib-only)で即実行
+- ⚡ **速度計測** — タスク別レイテンシ / tok/s をレポートに自動記録。**生成時間はパース失敗時のリトライを含む合計、tok/s と生成トークン数は最終生成のみの値**(掛け算しても生成トークン数には戻らない点に注意)
+- 📦 **同梱タスク40個（+任意20＋任意16）** — L1 easy 5 / L2 medium 5 / L3 hard 10 / **L4 expert 12 / L5 frontier 8**。さらに **L6 architect 20問 (t041–t060) を任意オプション (`--with-l6`) で**、**L7 grandmaster 16問 (t063–t107 の16問) を `--with-l7` で追加** でき (併用可)、上位帯の天井効果を破る。**`--only-l6`/`--only-l7`** で既定40問を除いてL6/L7だけを単体実行し（分割運用向け）、後日 `certify --merge` で結果を統合することも可能。frontier/architect/grandmaster は複数ファイル・回帰罠・性能制約(perf_timeout)を含み、issueは**症状ベース**で原因診断を要求。外部依存なし(stdlib-only)で即実行
 - 🛡️ **安全設計** — テストはLLMに非公開、patch書込先は既知ファイルに限定、元タスクは不変
 
 ## 🚀 クイックスタート
@@ -56,8 +56,8 @@ llmbench models
 llmbench run --model local-openai                 # 既定40タスク・1回
 llmbench run --model local-openai --runs 5        # 各タスク5回 → 成功率・pass@k
 llmbench run --model local-openai --with-l6 --runs 5  # L6(architect)20問を加えて計60タスク
-llmbench run --model local-openai --with-l7 --runs 5  # L7(grandmaster)40問を加えて計80タスク
-llmbench run --model local-openai --with-l6 --with-l7 --runs 5  # L6+L7を併用し計100タスク（天井評価）
+llmbench run --model local-openai --with-l7 --runs 5  # L7(grandmaster)16問を加えて計56タスク
+llmbench run --model local-openai --with-l6 --with-l7 --runs 5  # L6+L7を併用し計76タスク（天井評価）
 llmbench run --model local-openai --only-l6 --runs 5  # L6だけ単体実行(baseなし) → 後日 certify --merge で統合
 llmbench run --model local-openai --runs 5 --concurrency 5  # 試行を5並列で実行し総時間短縮(要: サーバを --parallel 5 -cb で起動)
 llmbench run --model qwen2.5-coder:7b --runs 5    # Ollamaの実モデル名を直接指定もOK
@@ -111,10 +111,10 @@ Issue言語: `en` / タスク数: 20 / 試行: ×5
 - 🟢 自律 17/20 (85%) / 🟡 補助 2/20 (10%) / 🔴 不可 1/20 (5%)
 > 総合推奨: おおむね自律。ただし🔴不可 1/20 (5%) は要注意
 
-| | Task | 判定 | 信頼性 | Quality | Combined | tok/s |
-|---|---|---|---|---|---|---|
-| ✅ | t007 | 🟡 補助 | 4/5 (成功率80%) | 100 | 80 | 111.9 |
-| ❌ | t020 | 🔴 不可 | 0/5 (成功率0%)  | 0   | 0  | 122.2 |
+| | Task | 難易度 | 判定 | 信頼性 | 生成ファイル | Quality | Combined | 生成時間 | tok/s | 備考 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ✅ | t007 | medium | 🟡 補助 | 4/5 (成功率80%) | `word_freq.py` | 100 | 80 | 1.5s | 111.9 | flaky 4/5 passed |
+| ❌ | t020 | hard | 🔴 不可 | 0/5 (成功率0%) | `calc.py` | 0 | 0 | 3.8s | 122.2 | tests failed |
 ```
 
 </details>
@@ -136,6 +136,10 @@ combined = success_rate × (0.5 + 0.5 × quality / 100) × 100
 | 0.6 (flaky) | 90 | **57** | たまに失敗。信頼性で減点 |
 
 > [!NOTE]
+> `--runs N` の多試行では、headline の Resolved は**成功率 ≥ 0.5 の多数決**です(`runs=1` なら単一試行と一致)。
+> Resolved率と平均成功率は別物で、Resolved率のほうが甘く出ます。
+
+> [!NOTE]
 > マルチドメインでも同じ式が使える。各 grader が `(resolved, quality)` に正規化して返すため、
 > detection は F1、constraint はチェック通過率、judge は rubric スコア、qa は正誤が
 > そのまま success/quality に写像され、pass@k・usability・certify を無改修で共有する。
@@ -148,14 +152,14 @@ combined = success_rate × (0.5 + 0.5 × quality / 100) × 100
 | ティア | 既定条件 | 意味 |
 |---|---|---|
 | 🟢 自律 | success ≥ 0.9 かつ quality ≥ 80 | レビューほぼ不要で任せられる |
-| 🟡 補助 | success ≥ 0.6 | レビュー前提なら使える |
+| 🟡 補助 | success ≥ 0.6 かつ quality ≥ 0(`assisted.min_quality` で変更可) | レビュー前提なら使える |
 | 🔴 不可 | 上記未満 | この種のタスクには任せられない |
 
 ### 🎓 使えるライン認証 (`certify`)
 
 usability判定が**タスク単位**なのに対し、`certify` は**モデル全体**を判定する。
-難易度を tier(L1-L7) にマップし、tierごとの平均成功率/combinedが gate を満たすかを
-**独立に**評価して「到達レベル」を出す。`llmbench certify results/<...>_results.json`。
+難易度を tier(L1-L7) にマップし、tierごとに gate を満たすかを評価し、
+**独立合格tier(主判定 = L4)と累積到達レベルの2つ**を出す。`llmbench certify results/<...>_results.json`。
 
 | Gate | 条件 (tier平均) | 意味 |
 |---|---|---|
@@ -164,14 +168,14 @@ usability判定が**タスク単位**なのに対し、`certify` は**モデル�
 | L3 hard | success ≥ 75% かつ combined ≥ 60 | 実務の単純〜中級バグ可 |
 | **L4 expert** | **success ≥ 60% かつ combined ≥ 55** | **✅ 使えるライン (監督付き実務投入)** |
 | L5 frontier | success ≥ 40% | フロンティア級 |
-| L6 architect | success ≥ 55% かつ combined ≥ 60 (暫定) | アーキテクト級・上位帯の分離 |
+| L6 architect | success ≥ 60% かつ combined ≥ 58 | アーキテクト級・上位帯の分離 |
 | L7 grandmaster | success ≥ 35% かつ combined ≥ 55 (暫定) | グランドマスター級・天井評価帯 |
 
 **使えるライン = L4 を独立に合格**(下位tierの取りこぼしに左右されない)。
 閾値は `llmbench/certify.py` の `DEFAULT_GATES` で調整可能。L6 は `--with-l6`、L7 は `--with-l7`
 で測定した結果にのみ現れる(既定の40問評価では未測定)。L7 は「使えるラインの実務判定」ではなく
 最上位帯の頭打ちを検出する**天井評価帯**のため、L6 より低い `min_success` を設定している。
-L6/L7 の閾値はいずれも暫定で、実モデル較正後に確定する(L7 は未較正)。
+L6 の閾値は 2026-06-26 の実モデル較正で確定済み。L7 の閾値は暫定で、実モデル較正後に確定する。
 `--only-l6`/`--only-l7` で分割実行した場合は `certify --merge a.json b.json`
 (task_id後勝ちで合算) により1回の判定にまとめられる。
 `certify` はコーディング以外のドメインを測定していれば、**ドメイン別ゲート + バランス指数 +
@@ -184,7 +188,10 @@ L6/L7 の閾値はいずれも暫定で、実モデル較正後に確定する(L
 | 🔍 Ruff | 0.4 | E/F/W/B/SIM/C4/S ルールのissue密度で減点 |
 | 🌀 radon | 0.3 | Maintainability Index + 最悪CCランクで減点 |
 | 🤖 LLMレビュー | 0.3 (任意) | 別LLMが0-10点でコードレビュー |
-| 📡 SonarQube | 任意 | サーバ稼働時のみ。重大度別減点 |
+| 📡 SonarQube | 任意 | サーバ稼働時のみ。重大度別減点。**既定 weight は 0.0 なので、`enabled: true` にするだけでは合成スコアに寄与しません。`config.yaml` で weight を正の値にしてください** |
+
+> [!NOTE]
+> 無効なレイヤーは重みごと除外して残りで再正規化されます。既定(ruff + radon のみ有効)の実効重みは **ruff 0.571 / radon 0.429** です。
 
 ## 🌐 マルチドメイン評価（コーディング以外）
 
@@ -206,7 +213,9 @@ L6/L7 の閾値はいずれも暫定で、実モデル較正後に確定する(L
 - **judge を有効化**する場合は `config.yaml` の `quality.judge.enabled: true` と `judge_model` を設定（self-preference 回避のため候補モデルと別系統を推奨）。
 
 > [!NOTE]
-> writing/medical のゲート閾値は暫定（未較正）で、`certify_domains` / `DEFAULT_MED_GATES` で調整可能。
+> writing/medical のゲート閾値は暫定（未較正）。ドメイン別ゲートは `llmbench/certify.py` の
+> `DEFAULT_DOMAIN_GATES` が既定値で、`config.yaml` の `certify_domains:` で上書きできます
+> (`llmbench certify --config config.yaml` を指定した場合)。医療の難易度別gateは `DEFAULT_MED_GATES` で調整可能。
 > 医療は臨床的妥当性の保証ではなく、5択MCQのチャンス正答率(約20%)を踏まえた**参考値**として扱う。
 
 ## ⚙️ 設定
@@ -217,7 +226,7 @@ L6/L7 の閾値はいずれも暫定で、実モデル較正後に確定する(L
 models:
   local-openai:            # llama.cpp / LM Studio / vLLM
     type: openai
-    base_url: "http://localhost:8080/v1"
+    base_url: "http://localhost:8085/v1"
     model: "auto"          # auto = /v1/models のロード中モデルを自動採用 (config編集不要)
     # auto_prefer: "qwen"  # 複数モデルロード時に部分一致で選択
   local-ollama:
@@ -237,8 +246,10 @@ models:
 run:
   issue_lang: en           # ja に切替で language tax 検証
   test_timeout: 120
+  generate_retries: 1      # パース失敗時の再生成回数
   runs: 1                  # 各タスクの試行回数 (>1 で pass@k・成功率)
   sample_temp: 0.8         # 複数試行時のサンプリング温度
+  concurrency: 1           # 試行(runs)の同時実行数 (>1 で並列実行)
   # ollama_host: "http://localhost:11434"   # Ollama接続先 (未定義モデルの自動解決)
 
 quality:
@@ -297,14 +308,18 @@ llmbench run --model qwen2.5-coder:32b --base-url http://192.168.1.10:11434
 
 > [!NOTE]
 > `${VAR}` 参照の環境変数が未設定の場合は明確なエラーになります(空文字での分かりにくい401を防止)。
+> 通信断など一時的なエラーは既定 `transient_retries: 2` 回まで自動リトライします(モデルごとに `models:` の各エントリで上書き可)。
 
 ## 📁 プロジェクト構成
 
 ```
 swe-bench/
 ├── llmbench/
-│   ├── clients/        # 🔌 LLM接続 (openai_compat / ollama / mock)。model:auto・Ollama一覧
+│   ├── clients/        # 🔌 LLM接続 (openai_compat / ollama / cli_agent / multiagent / mock)。model:auto・Ollama一覧
 │   ├── graders/        # 🌐 採点器: code / detection / constraint / judge / qa + checks(IFEval)
+│   ├── cli.py          # 🖥️ CLIエントリポイント (run/compare/certify/validate/models/list-tasks)
+│   ├── tasks.py        # 🧩 台帳(jsonl)ロード・マージ (--with-l6/l7・--only-* 等)
+│   ├── prompts.py      # ✉️ LLMへのプロンプト構築 (issue + 出力契約)
 │   ├── patch.py        # 📝 LLM出力パース (FILE:マーカー + コードブロック)
 │   ├── sandbox.py      # 📦 一時コピー + pytest隔離実行
 │   ├── functional.py   # ✅ resolved判定 (code grader が使用)
@@ -317,8 +332,10 @@ swe-bench/
 │   └── report.py       # 📊 Markdownレポート (ドメイン別サマリ込み)
 ├── tasks/              # 🧩 既定40問 (L1 easy5 / L2 medium5 / L3 hard10 / L4 expert12 / L5 frontier8)
 │                       #    + tasks_l6.jsonl (L6 architect 20問, --with-l6)
-│                       #    + tasks_l7.jsonl (L7 grandmaster 40問, --with-l7)
+│                       #    + tasks_l7.jsonl (L7 grandmaster 16問, --with-l7)
+│                       #    + tasks_l7_v1.jsonl (旧L7 40問, t061–t100。退避済み。--l7-ledger tasks_l7_v1.jsonl で再実行可)
 │                       #    + tasks_sec/gen/write/med.jsonl (ドメイン, --with-sec/gen/write/med)
+├── tests/              # ✅ pytestユニットテスト (certify --merge / cli_agent / 接続 / 台帳ロード)
 ├── DESIGN_DOMAINS.md   # 📐 マルチドメイン拡張の設計仕様
 └── config.yaml
 ```
@@ -378,7 +395,7 @@ qa=`gold.json`のキー)。スキーマと採点規約は [📐 DESIGN_DOMAINS.m
 - [x] 🔎 `model: auto` / Ollama動的モデル選択
 - [x] 🧩 難問tier (L4 expert / L5 frontier) で天井効果を打破 — 計40問
 - [x] 🏛️ L6 architect tier (t041–t060, 20問) を任意オプション `--with-l6` で追加 — 上位帯の分離
-- [x] 🏆 L7 grandmaster tier (t061–t100, 40問) を任意オプション `--with-l7` で追加 — 天井評価帯 (実モデル較正は未了、gate 暫定 succ≥0.35 / comb≥55)
+- [x] 🏆 L7 grandmaster tier を v2 (16問, t063–t107) に再編 — 旧40問(t061–t100)は上位モデルが横並びになり弁別力を失ったため `tasks_l7_v1.jsonl` へ退避。任意オプション `--with-l7` で追加 — 天井評価帯 (実モデル較正は未了、gate 暫定 succ≥0.35 / comb≥55)
 - [x] 🎓 tier合格制「使えるライン」認証 (`certify`, L1–L7)
 - [x] ⏱️ タスク別 perf_timeout (性能制約タスク)
 - [x] 🔀 分割実行 (`--only-l6`/`--only-l7`) と `certify --merge` による統合認証

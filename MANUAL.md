@@ -13,7 +13,7 @@
 | [CHANGES.md](CHANGES.md) | 全員 | 追加機能の要約と変更履歴 |
 | **本書（運用マニュアル）** | 運用・保守・連携担当 | 出力ファイルの**仕様**・内部実装・運用上の注意・移行・自動化 |
 
-> 対象バージョン: 既定40タスク(L1-L5) + 任意L6 architect 20タスク(`--with-l6`/単体実行`--only-l6`) + 任意L7 grandmaster 40タスク(`--with-l7`/単体実行`--only-l7`)・多試行(pass@k)・usability・compare・certify(L1-L7、`certify --merge`で分割結果を統合)・`model:auto` 対応版。
+> 対象バージョン: 既定40タスク(L1-L5) + 任意L6 architect 20タスク(`--with-l6`/単体実行`--only-l6`) + 任意L7 grandmaster **16タスク**(v2。`--with-l7`/単体実行`--only-l7`。旧40問は `--l7-ledger tasks_l7_v1.jsonl` で実行可)・多試行(pass@k)・usability・compare・certify(L1-L7、`certify --merge`で分割結果を統合)・`model:auto` 対応版。
 > `results.json` に `summary.usability` / `success_rate` 等を含む。
 
 ---
@@ -57,7 +57,7 @@
 | ⑤ | **usabilityティア** | スコアを🟢自律/🟡補助/🔴不可の運用判断に翻訳 |
 | ⑥ | **モデル横断比較 (`compare`)** | 参照モデルと並べて位置づけ |
 | ⑦ | **モデル解決 (`model:auto` / Ollama動的)** | config編集なしでモデルを差し替え |
-| ⑧ | **難タスク t016–t020** | 失敗が出る実務的タスクで識別力を確保（全20タスク） |
+| ⑧ | **難タスク t016–t020** | 失敗が出る実務的タスクで識別力を確保（既定40タスク） |
 
 ---
 
@@ -86,6 +86,7 @@ results/
 | `model` | str | モデルラベル。`model:auto`時はサーバ検出名、`--label`で上書き可 |
 | `issue_lang` | str | `en` / `ja` |
 | `artifacts_dir` | str | 対応するartifactsディレクトリ名（相対） |
+| `served_model` | str | 任意。`model: auto` または `type: cli` で実モデルが検出できたときのみ出力される実モデル名 |
 | `summary` | obj | 下表 |
 | `results` | array | タスクごとの結果（下表） |
 
@@ -108,8 +109,9 @@ results/
 | キー | 型 | 説明 |
 |---|---|---|
 | `task_id` | str | 例: `t001` |
-| `difficulty` | str | `easy` / `medium` / `hard` |
+| `difficulty` | str | 台帳の `difficulty` をそのまま転記する自由文字列。コーディング7値（`easy` / `medium` / `hard` / `expert` / `frontier` / `architect` / `grandmaster`）+ ドメイン用8値（`sec_medium` / `sec_hard` / `gen_easy` / `gen_medium` / `write_basic` / `med_basic` / `med_std` / `med_hard`）の計15値。tier への対応は `certify.py` の `DIFFICULTY_TO_TIER` が正 |
 | `title` | str | タスクタイトル |
+| `domain` | str | `code` / `security` / `general` / `writing` / `medical`。既定 `"code"` |
 | `resolved` | bool | テスト合格判定（多試行では success_rate≥0.5） |
 | `quality_score` | float | 0–100。多試行では**成功試行の平均** |
 | `combined` | float | 0–100。`success_rate × (floor + (1-floor)×quality/100) × 100` |
@@ -129,12 +131,14 @@ results/
 
 ### 2.2 `report.md` の構成
 
-刷新後の構成は **サマリ → タスク別結果 → 難易度別 → タスク別詳細**。
+刷新後の構成は **サマリ → usability判定 → タスク別結果 → 難易度別 → ドメイン別（該当時） → タスク別詳細**。
 
 - **サマリ**: Resolved率（n/N）・品質平均・Combined平均を表形式。`artifacts_dir` がある場合は保存先を注記。
-- **タスク別結果（一覧表）**: 先頭列が ✅/❌ アイコン、**生成ファイル**列と**備考**列（失敗理由・パースエラー）を追加。
-- **難易度別**: easy/medium/hard ごとの resolved 数と品質平均。
-- **タスク別詳細**: タスクごとに難易度・判定・生成ファイル・生成物パス・**整形済み品質内訳**（ruff/complexityを日本語で説明）。
+- **usability判定**: サマリ直下に🟢自律/🟡補助/🔴不可のティア集計・難易度×ティアの割合・保守的な総合推奨を出力。
+- **タスク別結果（一覧表）**: 先頭列が ✅/❌ アイコン、**判定（ティア）**列、**生成ファイル**列と**備考**列（失敗理由・パースエラー）を追加。多試行時は**信頼性**列も追加。
+- **難易度別**: 難易度（**7段階**: easy/medium/hard/expert/frontier/architect/grandmaster）ごとの resolved 数と品質平均。
+- **ドメイン別（該当時）**: コーディング以外の grader が混在する場合のみ、domain ごとの Resolved・平均成功率・平均combinedを表示。
+- **タスク別詳細**: タスクごとに難易度・判定・usability・生成ファイル・生成物パス・**整形済み品質内訳**（ruff/complexityを日本語で説明）。
 
 ### 2.3 `artifacts/<task_id>/` ディレクトリ契約
 
@@ -177,10 +181,10 @@ results/
 ### 3.3 ログ出力フォーマット（`_log_task`）
 
 ```
-[3/15] t003 (easy) リスト要素の重複除去
-    生成OK  files=[dedup.py]  214tok @ 126.9tok/s
-      └ dedup.py (12 LOC): def dedup(items): ⏎ seen = set()
-    ✅ RESOLVED  quality=100 combined=100  (1.5s)
+[3/40] t003 (easy) add_tag leaks tags across calls
+    生成OK  files=[tags.py]  187tok @ 118.4tok/s
+      └ tags.py (9 LOC): def add_tag(tag, tags=None): ⏎ if tags is None:
+    ✅ RESOLVED  quality=100 combined=100  [🟢 自律]  (1.2s)
 ```
 
 - パース失敗時は `生成パース失敗: <理由>` と `出力プレビュー:`（生出力冒頭）を表示。
@@ -295,15 +299,17 @@ cat "results/$adir/t011/llm_output.txt"
 
 - **タスク別結果テーブルの列構成が変更**されました。
   - 旧: `| Task | 難易度 | Resolved | Quality | Combined | 生成時間(s) | tok/s | 失敗理由 |`（8列、先頭=Task）
-  - 新: `| | Task | 難易度 | 生成ファイル | Quality | Combined | 生成時間 | tok/s | 備考 |`（9列、先頭=✅/❌アイコン）
+  - 新: `| | Task | 難易度 | 判定 | 生成ファイル | Quality | Combined | 生成時間 | tok/s | 備考 |`（10列、先頭=✅/❌アイコン）。
+    多試行時は「判定」の後に**信頼性**列が入り11列になる。
   - Resolved の `O/X` は ✅/❌ に変更。Markdownテーブルを機械パースしている場合は要修正。
 - セクション見出し `## 品質内訳 (タスク別)` は `## タスク別詳細` に変更。
 
 ### 7.3 `config.yaml`
 
-- サンプルの `local-openai` が `base_url: http://localhost:8085/v1` / `model: Qwopus3.6-27B-Coder-MTP` に更新。
-  これは設定例の変更であり挙動には影響しません。**結果ファイル名は `--model` のキー名**（`local-openai`）で決まるため、
-  キー名を変えない限りファイル名は安定します。
+- サンプルの `local-openai` が `base_url: http://localhost:8085/v1` / `model: "auto"` に更新
+  （実際の config.yaml 実値。`auto` はサーバのロード中モデルを自動採用するため、ggufを差し替えても
+  config編集不要）。これは設定例の変更であり挙動には影響しません。**結果ファイル名は `--model` のキー名**
+  （`local-openai`）で決まるため、キー名を変えない限りファイル名は安定します。
 
 ---
 
@@ -323,7 +329,8 @@ cat "results/$adir/t011/llm_output.txt"
 | `llmbench/tasks.py` | `Task.perf_timeout` フィールド・**`load_tasks(..., ledgers=[...])` で複数台帳マージ（id先勝ち）** |
 | `llmbench/runner.py` | per-task `perf_timeout` を採用（未指定時は `test_timeout`）・**`BenchmarkRunner(..., ledgers=...)`** |
 | `config.yaml` | `model:auto`・`run.runs`/`sample_temp`/`ollama_host`・`usability:`・`ref-gpt` |
-| `tasks/` | 難タスク t016–t020 + **L4 expert t021–t032 / L5 frontier t033–t040**（既定40タスク）+ **L6 architect t041–t060（別台帳 `tasks_l6.jsonl`・`--with-l6` で有効化）** + **L7 grandmaster t061–t100（別台帳 `tasks_l7.jsonl`・`--with-l7` で有効化。数値安定性(t061-068)/状態一貫性(t069-076)/複数結合バグ(t077-084)/深い並行性(t085-092)/敵対的パース・セキュリティ(t093-100)の5軸×8問。t098のみ `perf_timeout: 30`）** |
+| `tasks/` | 難タスク t016–t020 + **L4 expert t021–t032 / L5 frontier t033–t040**（既定40タスク）+ **L6 architect t041–t060（別台帳 `tasks_l6.jsonl`・`--with-l6` で有効化）** + **L7 grandmaster 現行16問（別台帳 `tasks_l7.jsonl`・`--with-l7` で有効化。v1残留9問（t063, t064, t068, t069, t076, t085, t092, t093, t095）+ 新規7問（t101–t107。3多重oracle 4問 + 大規模リファクタ/仕様推論 3問）。旧40問（5軸×8問構成。t098のみ `perf_timeout: 30`）は `tasks_l7_v1.jsonl` に退避、`--l7-ledger tasks_l7_v1.jsonl` で実行可）** |
+| `llmbench/clients/cli_agent.py` | **新規**。`type: cli` バックエンド（サブスクCLI: `claude`/`codex`/`grok`/`custom` プリセット）。空の一時cwdでheadless実行し、実行モデルを検出して `served_model` に記録 |
 | `llmbench/graders/` | **新規パッケージ**（マルチドメイン評価）。`__init__.py`（グレーダーレジストリ + `GradeCtx`/`GraderEval`）・`checks.py`（IFEval式チェック群）・`code.py`（既存パイプラインのラップ）・`detection.py`（security）・`constraint.py`（general）・`judge.py`（writing・experimental）・`qa.py`（medical・reference value）。各グレーダーは `(resolved, quality)` に正規化して返すため、既存の集計/pass@k/usability/certifyパイプラインは無改修 |
 | `llmbench/cli.py`（マルチドメイン） | **`--with-sec/gen/write/med`・`--only-sec/gen/write/med`**（`--with-l6/l7`と同体系。list-tasks/run/validate共通の`_common_args`を拡張） |
 | `llmbench/certify.py`（マルチドメイン） | **ドメイン別ゲート**（`certify_domains`）・**バランス指数**（coding＋非experimentalドメインの調和平均）・**医療の難易度別(med_basic/med_std/med_hard)正答率readout** |
@@ -331,10 +338,10 @@ cat "results/$adir/t011/llm_output.txt"
 | `config.yaml`（マルチドメイン） | **`graders:`**（pass_f1/pass_ratio/pass_score）・**`quality.judge:`**（enabled/judge_model/seeds）・**`certify_domains:`** |
 | `tasks/`（マルチドメイン） | **ドメインタスク追加**: security s01–s04（別台帳`tasks_sec.jsonl`、`--with-sec`）/ general g01–g03（`tasks_gen.jsonl`、`--with-gen`）/ writing w01–w02（`tasks_write.jsonl`、`--with-write`）/ medical m01–m24（`tasks_med.jsonl`、`--with-med`。難易度 med_basic7/med_std11/med_hard6、全問ファクトチェック済） |
 
-> 検証状況: `llmbench validate` PASS（gold 40/40・broken 40/40）、selfcheck 既存20問 + **L6 20問 20/20** + **L7 40問 40/40**、
-> `validate --with-l6` で gold 20/20・broken 20/20、`validate --with-l7` で gold 40/40・broken 40/40、
-> `list-tasks` 40（既定）/ 60（`--with-l6`）/ 80（`--with-l7`）/ 100（`--with-l6 --with-l7`）/
-> 20（`--only-l6`）/ 40（`--only-l7`）/ 60（`--only-l6 --only-l7`）、
+> 検証状況: `llmbench validate` PASS（gold 40/40・broken 40/40）、selfcheck 既存20問 + **L6 20問 20/20** + **L7 16問 16/16**（v2。旧40問時代の記録は `TASKS.md` の「L7 v1」節を参照）、
+> `validate --with-l6` で gold 20/20・broken 20/20、`validate --with-l7` で gold 16/16・broken 16/16、
+> `list-tasks` 40（既定）/ 60（`--with-l6`）/ 56（`--with-l7`）/ 76（`--with-l6 --with-l7`）/
+> 20（`--only-l6`）/ 16（`--only-l7`）/ 36（`--only-l6 --only-l7`）、
 > 多試行集計・usability・compare・certify・モデル解決の各単体、ruff（指摘ゼロ）、`compileall` を確認済み。
 > 追加検証（マルチドメイン）: `llmbench validate --only-sec|gen|write|med` が全てPASS（gold全成功・broken全失敗、LLM不要）。詳細は10章。
 
@@ -380,6 +387,30 @@ artifacts導入後に加わった主要機能の運用リファレンス。利�
 - **多試行はディスク/時間が N 倍**。artifactsは代表1試行のみ保存するので肥大化は限定的だが、生出力は残る。
 - pass@k の解釈は 9.1 の通り。`avg_pass_at_k` を「汎化性能」と誤読しないこと。
 - レポート表の列数が増えている（判定・信頼性列）。機械パースは要追従（7章の移行メモ参照）。
+
+### 9.6 L7 v1/v2 切替運用（`--l7-ledger`）
+
+2026-07-21 に L7 grandmaster は 40問(v1) から 16問(v2) へ差し替えられた。既定の `--with-l7` /
+`--only-l7` は現行台帳 `tasks/tasks_l7.jsonl`（v2・16問）を使うが、`--l7-ledger` で参照する
+台帳ファイルを差し替えることで旧40問(v1)を再測定したり、過去のv1結果と継続比較したりできる。
+
+```bash
+# 旧40問(v1)で再測定する場合
+llmbench run --model local-openai --with-l7 --l7-ledger tasks_l7_v1.jsonl
+
+# validate も同様にv1台帳へ切替可能
+llmbench validate --with-l7 --l7-ledger tasks_l7_v1.jsonl
+```
+
+- **過去のv1結果との継続比較**: v1時代に取得した `results.json`（L7が40問構成のもの）は、
+  `certify --merge` では task_id が重複しないため v2結果とそのまま合算はできない。比較したい
+  場合は `compare` で両者を横に並べるか、`--l7-ledger tasks_l7_v1.jsonl` で同一モデルを
+  v1構成で再測定してから旧結果と突き合わせる。
+- v1残留9問（t063, t064, t068, t069, t076, t085, t092, t093, t095）は両台帳に同じ内容で
+  存在するため、task_id ベースでの部分比較は可能。
+- v1のtier gate（pass@1 ≥ 0.35 / combined ≥ 55）は当時のまま16問版でも暫定的に流用されて
+  おり、**v2向けの再較正は未実施**。v1台帳で測る場合もこの暫定gateが適用される。
+- 詳細な旧40問の設計（5軸×8問）は `TASKS.md` の「L7 v1（退避済み・t061–t100）」節を参照。
 
 ---
 
@@ -450,8 +481,10 @@ certify_domains:
 
 ### 10.6 運用上の注意
 
-- writing/medical のゲート閾値は暫定（未較正）。`certify.py` の `DEFAULT_DOMAIN_GATES` / `DEFAULT_MED_GATES`、
-  もしくは `config.yaml` の `certify_domains:` で調整する。
+- writing/medical のゲート閾値は暫定（未較正）。ドメイン別ゲートの既定値は `llmbench/certify.py` の
+  `DEFAULT_DOMAIN_GATES` / `DEFAULT_MED_GATES` です。`config.yaml` の `certify_domains:` /
+  `certify_medical:` で上書きするには、`llmbench certify --config config.yaml <results.json>` の
+  ように `--config` を明示してください（省略時は既定値が使われます）。
 - judge を有効化する場合、self-preference回避のため候補モデルとは別系統の `judge_model` を推奨。
 - 医療タスク（m01–m24）は薬理/循環器/救急・第一選択/内分泌/感染症/腎・生理/神経/小児/産婦人科/検査・中毒の
   10領域、難易度 med_basic 7問 / med_std 11問 / med_hard 6問。全問ゴールドは独立にファクトチェック済み。
@@ -493,8 +526,8 @@ certify_domains:
 | 項目 | Alibaba Cloud (Model Studio) Qwen 有料プラン (token-plan) | z.ai GLM Coding Plan |
 |---|---|---|
 | base_url (OpenAI互換) | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`（例は ap-southeast-1。リージョンは発行先に合わせる） | `https://api.z.ai/api/coding/paas/v4` |
-| 主モデル名 | `qwen3.7-max` | `glm-5.2` |
-| 代替モデル | `qwen3.7-plus` / `qwen3.6-plus` / `qwen3.6-flash`（qwen3-coder系はToken Plan非提供） | `glm-4.7` / `glm-5.1` |
+| 主モデル名 | `qwen3.6-flash`（非思考コーダー・推奨） | `glm-5.2` |
+| 代替モデル | `qwen3.7-plus` / `qwen3.6-plus`（qwen3-coder系はToken Plan非提供）。`qwen3.7-max` 等の**思考モデルはstream必須でllmbench非対応** | `glm-4.7` / `glm-5.1` |
 | APIキー | **プラン専用キー `sk-sp-xxxx`**（通常の `sk-xxxx` ではない） | z.ai APIキー |
 | キー発行元 | Model Studio コンソール → プランページ | z.ai コンソール |
 | 誤設定時の挙動 | 通常キー/通常エンドポイントだと従量課金に落ちる | 通常 `paas/v4` / `anthropic` は別課金・別プロトコル |
@@ -507,7 +540,7 @@ models:
   qwen-coding:
     type: openai
     base_url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"  # 発行リージョンの token-plan 専用ドメイン (compatible-mode/v1)
-    model: "qwen3.7-max"        # Token Plan提供モデル。代替: qwen3.7-plus / qwen3.6-plus / qwen3.6-flash
+    model: "qwen3.6-flash"      # 非思考コーダー(推奨)。qwen3.7-max等の思考モデルはstream必須でllmbench非対応
     api_key: "${DASHSCOPE_CODING_API_KEY}"   # ★プラン専用キー sk-sp-xxxx（通常の sk-xxxx ではない）
     temperature: 0.2
     max_tokens: 24576                # reasoning出力に備え大きめ
@@ -517,7 +550,7 @@ models:
   glm-coding:
     type: openai
     base_url: "https://api.z.ai/api/coding/paas/v4"   # Coding Plan専用のOpenAI互換パス
-    model: "glm-5.2"                 # 代替: glm-4.7
+    model: "glm-4.7"                 # 代替: glm-4.7
     api_key: "${ZAI_API_KEY}"
     temperature: 0.2
     max_tokens: 24576
@@ -578,8 +611,8 @@ llmbench run --model glm-coding  --runs 3
 
 > [!WARNING]
 > **モデルはプランの提供リストから選ぶ。** Token Plan が提供するのは `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-plus` / `qwen3.6-flash` / `glm-5.x` / `kimi-k2.x` / `deepseek-*` 等で、
-> **`qwen3-coder-plus` などコーダー専用モデルは Token Plan には無い**（指定すると 404）。汎用フラッグシップ `qwen3.7-max` 等を使う。
-> なお `enable_thinking=true` を明示した場合のみ OpenAI互換では `stream=true` が要求される。llmbench は `enable_thinking` を送らないため既定の非思考動作で通る（明示的に思考出力を測りたい場合のみクライアント改修が要る）。
+> **`qwen3-coder-plus` などコーダー専用モデルは Token Plan には無い**（指定すると 404）。非思考コーダーの `qwen3.6-flash`（推奨）か、汎用フラッグシップの `qwen3.7-max` 等を使う。
+> なお `enable_thinking=true` を明示した場合、OpenAI互換では `stream=true` が要求される。**`qwen3.7-max` 等の思考モデルは stream 必須で llmbench 非対応**（llmbench はストリーミング応答に対応していないため）。思考モデルを測りたい場合はクライアント改修が要る。
 
 ### 11.3 コスト・レート制限・信頼性
 
@@ -592,6 +625,8 @@ llmbench run --model glm-coding  --runs 3
 | `max_tokens` | 上限が小さいと難タスクで生成途中停止 → `patch parse failed` | 非推論=4096 / 推論(reasoning)系=24576 以上 |
 | `timeout` | 混雑時の切断回避 | 長考モデルは 600 以上 |
 | `--tasks` で絞る | 対象タスクを限定して費用・時間を圧縮 | 較正・疎通は一部tierだけ実行 |
+| `transient_retries` | 通信断（`ConnectionError`/`Timeout`等）時のリトライ回数。既定2回（合計3回試行） | 不安定な回線では既定のままでよい。無効化するなら 0 |
+| `transient_backoff` | リトライの指数バックオフ初回遅延（秒）。既定2.0秒 | 429と混同しないよう `--concurrency` と併せて調整 |
 
 - 手順: **`llmbench validate`（LLM不要）でパイプライン疎通 → `--runs 1 --tasks <少数>` でキー・課金確認 → 本測定**。
 - レート制限(429)はタスク単位で `fail_reason` に出る。多発時は `--concurrency` を下げる。

@@ -39,7 +39,7 @@ def _mcq_letter(answer: str) -> str | None:
 
 class QaGrader(Grader):
     name = "qa"
-    domain = "general"
+    domain = "medical"   # GRADER_DOMAIN["qa"] と一致させること (check_domains 参照)
 
     def build_prompt(self, task, lang: str) -> tuple[str, str]:
         return _SYSTEM, task.issue(lang)

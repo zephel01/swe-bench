@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,19 +39,32 @@ def load_tasks(
     tasks_root: Path,
     only: list[str] | None = None,
     ledgers: list[str] | None = None,
+    strict: bool = True,
 ) -> list[Task]:
     """1つ以上の台帳(jsonl)からタスク一覧をロードする.
 
     ledgers 省略時は ["tasks.jsonl"] のみ。L6 などの任意 tier を上乗せする場合は
     ["tasks.jsonl", "tasks_l6.jsonl"] のように渡す。重複 task_id は先勝ち。
+
+    strict=True (既定) のとき、**台帳が1つも読めず、かつ欠落があった**場合は
+    FileNotFoundError を送出する。台帳名のタイポ (`--l7-ledger tasks_l7_TYPO.jsonl`)
+    が「0タスクで正常終了・resolved_rate=0.0」として保存され、全問失敗と
+    見分けがつかなくなるのを防ぐ。
+    一部だけ欠落した場合は警告を出して続行する (既定台帳を置かずドメイン台帳
+    だけで運用する構成を許容するため)。
+    `only` で全件除外された場合はここに該当しない (台帳自体は読めている)。
     """
     ledgers = ledgers or ["tasks.jsonl"]
     tasks = []
     seen: set[str] = set()
+    missing: list[Path] = []
+    loaded = 0
     for ledger in ledgers:
         jsonl = tasks_root / ledger
         if not jsonl.exists():
+            missing.append(jsonl)
             continue
+        loaded += 1
         for line in jsonl.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
@@ -79,4 +93,14 @@ def load_tasks(
                 continue
             seen.add(t.task_id)
             tasks.append(t)
+
+    if missing:
+        paths = ", ".join(str(p) for p in missing)
+        if loaded == 0 and strict:
+            raise FileNotFoundError(
+                f"台帳が1つも見つかりません: {paths}\n"
+                f"  --tasks-dir (現在: {tasks_root}) と "
+                f"--l6-ledger / --l7-ledger のファイル名を確認してください。"
+            )
+        print(f"⚠️  台帳が見つかりません (スキップ): {paths}", file=sys.stderr)
     return tasks

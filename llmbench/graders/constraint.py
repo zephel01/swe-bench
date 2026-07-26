@@ -55,6 +55,16 @@ class ConstraintGrader(Grader):
             }
         }
         failed = [f"{r['kind']}({r['detail']})" for r in results if not r["passed"]]
+        if total == 0:
+            # モデルの実力ではなくタスク定義の不備。集計に「失敗」として
+            # 紛れ込ませないよう、原因が分かる文言を残す。
+            reason = (
+                f"checks.json が見つからないか空です ({task.dir / 'checks.json'})。"
+                f"constraint grader は採点不能です"
+            )
+            ev.detail_output = reason
+            ev.fail_reason = reason
+            return ev
         ev.detail_output = f"{passed}/{total} checks passed" + (
             f"; failed: {failed}" if failed else ""
         )

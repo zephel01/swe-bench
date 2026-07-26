@@ -8,8 +8,10 @@ tierごとの平均成功率・平均combinedが gate を満たすかを **累�
 - 単体スクリプトとしても動く (stdlib のみ。llmbench本体に非依存):
     python3 certify.py results/<stamp>_<model>_results.json
     python3 certify.py --merge base40.json l6.json   # 分割実行を合算して1認証
-- llmbench に組み込む場合は llmbench/certify.py として配置し、
-  report.py / compare.py から `certify()` / `render_certificate_md()` を呼ぶ。
+  この非依存性は維持すること (単体経路で yaml 等を読ませない。ゲートは既定値)。
+- llmbench 内からは `llmbench certify` (cli.py の cmd_certify) が唯一の呼び出し元。
+  cmd_certify 経由の場合のみ config.yaml の certify_domains / certify_medical で
+  ゲートを差し替えられる (tier ゲートは既定値のまま)。
 """
 
 from __future__ import annotations
@@ -51,7 +53,8 @@ DEFAULT_GATES = {
     "L5": {"min_success": 0.40, "min_combined": 0.0},
     # L6 (architect): Phase 3 較正で確定 (ornith 9B/35B ×5run, 2026-06-26)。
     "L6": {"min_success": 0.60, "min_combined": 58.0},
-    # L7 (grandmaster): 暫定値。天井評価用 (t061-t100)。
+    # L7 (grandmaster): 暫定値。天井評価用 = tasks_l7.jsonl の16問 (t063-t107)。
+    # ⚠️ この 0.35/55.0 は旧40問時代の暫定値であり、16問版での再較正は未実施。
     # 実モデル較正 (フロンティア級モデル ×5run 想定) で確定するまでの仮ゲート。
     "L7": {"min_success": 0.35, "min_combined": 55.0},
 }
@@ -105,10 +108,16 @@ def aggregate_by_tier(results: list[dict]) -> dict[str, dict]:
 def certify(results: list[dict], gates: dict | None = None) -> dict:
     """tier集計 -> gate判定 -> 到達レベル.
 
-    戻り値: {achieved_level, verdict, tiers:[{tier,n,mean_success,
-    mean_combined,gate_pass,measured}], gates}
-    achieved_level は「測定済みかつ下位を含め連続して gate を満たした最上位tier」。
-    タスクが無い (未測定) tier は判定をスキップし、合否のブロックもしない。
+    戻り値: {achieved_level, verdict, cumulative_blocked_by, usable_line,
+    independent_pass, tiers:[{tier,n,mean_success,mean_combined,gate_pass,
+    measured}], gates}
+
+    achieved_level は「L1 から連続して gate を満たした最上位tier」(累積判定)。
+    累積判定は下位から順に見るので、**未測定tierに当たった時点で打ち切る**。
+    L7 だけを測った結果を「L7 到達」と誤認しないための仕様であり、
+    どこで打ち切ったかは cumulative_blocked_by = (tier, 理由) に入る
+    (理由は "unmeasured" = 未測定 / "gate_fail" = 測ったが不合格)。
+    tier ごとの単独の合否は非累積の independent_pass / usable_line を見ること。
     """
     gates = gates or DEFAULT_GATES
     agg = aggregate_by_tier(results)
@@ -116,6 +125,7 @@ def certify(results: list[dict], gates: dict | None = None) -> dict:
     rows = []
     achieved = None
     broken = False  # 一度 gate を落としたらそれ以上は認証しない
+    blocked_by: tuple[str, str] | None = None
     for tier in TIER_ORDER:
         g = gates[tier]
         if tier not in agg:
@@ -125,6 +135,10 @@ def certify(results: list[dict], gates: dict | None = None) -> dict:
                 "gate_pass": None,
                 "gate": g,
             })
+            # 未測定tierは累積の鎖を切る (飛ばして上位を認証しない)。
+            if not broken:
+                broken = True
+                blocked_by = (tier, "unmeasured")
             continue
         a = agg[tier]
         passed = (
@@ -144,6 +158,7 @@ def certify(results: list[dict], gates: dict | None = None) -> dict:
                 achieved = tier
             else:
                 broken = True
+                blocked_by = (tier, "gate_fail")
 
     # 非累積判定: 各tierを独立に評価する (下位tierの取りこぼしでブロックしない)。
     measured = [r for r in rows if r["measured"]]
@@ -151,9 +166,18 @@ def certify(results: list[dict], gates: dict | None = None) -> dict:
     l4 = next((r for r in rows if r["tier"] == "L4"), None)
     usable_line = bool(l4 and l4["measured"] and l4["gate_pass"])
 
+    # 未測定で打ち切った場合、累積判定は「不能」であって「未達」ではない。
+    if blocked_by is not None and blocked_by[1] == "unmeasured":
+        verdict = (
+            f"累積判定は不能({blocked_by[0]} が未測定)。独立判定を参照。"
+        )
+    else:
+        verdict = LEVEL_VERDICT.get(achieved, "")
+
     return {
         "achieved_level": achieved,          # 累積 (下位から連続合格した最上位)
-        "verdict": LEVEL_VERDICT.get(achieved, ""),
+        "verdict": verdict,
+        "cumulative_blocked_by": blocked_by,  # (tier, "unmeasured"|"gate_fail")
         "usable_line": usable_line,          # 主判定: L4を独立に合格したか
         "independent_pass": independent_pass,  # 独立に合格した全tier
         "tiers": rows,
@@ -167,13 +191,31 @@ def render_certificate_md(cert: dict, model: str = "") -> str:
     lines.append(head)
 
     # 主判定: 使えるライン = L4 を独立に合格したか (非累積)。
+    # 「未到達」には『測って落ちた』と『そもそも測っていない』の2種類があるので
+    # 文言を出し分ける (未測定を不合格と読み違えさせない)。
     usable = cert.get("usable_line")
-    usable_txt = "✅ 使えるライン到達" if usable else "❌ 使えるライン未到達"
-    lines.append(f"\n**{usable_txt}** (L4 expert を独立に合格){'' if usable else ''}")
+    l4 = next((r for r in cert["tiers"] if r["tier"] == "L4"), None)
+    if usable:
+        lines.append("\n**✅ 使えるライン到達** (L4 expert を独立に合格)")
+    elif l4 is not None and l4["measured"]:
+        lines.append("\n**❌ 使えるライン未到達** (L4 expert を独立に不合格)")
+    else:
+        lines.append("\n**❌ 使えるライン未到達** (L4 expert は未測定のため判定不能)")
 
     # 副判定: 累積到達レベル (下位tierも連続合格＝一貫性の指標)。
     lvl = cert["achieved_level"]
-    lvl_txt = TIER_LABEL.get(lvl, "なし (L1未達)")
+    blocked = cert.get("cumulative_blocked_by")
+    unmeasured_block = bool(blocked and blocked[1] == "unmeasured")
+    if lvl is None:
+        # 未測定で止まったのか、L1 を実際に落としたのかを区別する。
+        lvl_txt = (
+            f"判定不能 ({blocked[0]} が未測定)" if unmeasured_block
+            else "なし (L1未達)"
+        )
+    else:
+        lvl_txt = TIER_LABEL.get(lvl, lvl)
+        if unmeasured_block:
+            lvl_txt += f" (これより上は {blocked[0]} が未測定のため判定不能)"
     indep = cert.get("independent_pass", [])
     lines.append(
         f"参考: 累積到達レベル **{lvl_txt}** / 独立合格tier: "
@@ -325,8 +367,13 @@ MED_TIER_LABEL = {
 DEFAULT_MED_GATES = {"med_basic": 0.80, "med_std": 0.60, "med_hard": 0.40}
 
 
-def certify_medical(results: list[dict]) -> dict:
-    """medical ドメインを難易度(med_basic/std/hard)別に正答率集計する."""
+def certify_medical(results: list[dict], gates: dict | None = None) -> dict:
+    """medical ドメインを難易度(med_basic/std/hard)別に正答率集計する.
+
+    gates 省略時は DEFAULT_MED_GATES (未較正の参考値)。
+    config.yaml の `certify_medical:` を渡すと閾値を差し替えられる。
+    """
+    gates = gates or DEFAULT_MED_GATES
     buckets: dict[str, list] = {}
     for t in results:
         if t.get("domain") != "medical":
@@ -339,7 +386,7 @@ def certify_medical(results: list[dict]) -> dict:
         xs = buckets[tier]
         overall += xs
         acc = _mean(xs)
-        gate = DEFAULT_MED_GATES.get(tier, 0.0)
+        gate = gates.get(tier, 0.0)
         rows.append({"tier": tier, "n": len(xs), "accuracy": acc,
                      "gate": gate, "pass": acc >= gate})
     return {"tiers": rows, "n": len(overall),

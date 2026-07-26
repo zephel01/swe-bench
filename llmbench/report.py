@@ -242,7 +242,9 @@ def render_markdown(run) -> str:
             if multi:
                 lines.append(
                     f"- 品質内訳（下記は**代表1試行**の値。"
-                    f"上のQuality {r.quality_score:.0f} は{r.runs}試行の平均）:"
+                    f"上のQuality {r.quality_score:.0f} は"
+                    f"成功した {r.n_pass}/{r.runs} 試行の平均。"
+                    f"失敗試行は分母に含まない）:"
                 )
             for name, comp in r.quality_components.items():
                 if not comp.get("enabled"):

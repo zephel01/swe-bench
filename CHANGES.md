@@ -1,3 +1,15 @@
+# 🏆 L7 grandmaster tier v2 へ差し替え (2026-07-21)
+
+旧L7(t061–t100, 40問)は上位クラウドモデル2機種の実測で天井効果が再発し(40問中32問が Combined 差3pt未満)、弁別力を失っていたため台帳を組み替えた。
+
+- `tasks/tasks_l7.jsonl` を **40問 → 16問** に差し替え。旧40問は `tasks/tasks_l7_v1.jsonl` へ退避(`--l7-ledger tasks_l7_v1.jsonl` で実行可)
+- 残留9問: t063, t064, t068, t069, t076, t085, t092, t093, t095
+- 新規7問: t101–t107(3多重oracle 4問 + 大規模リファクタ/仕様推論 3問)
+- フラグ別件数が変わる: `--with-l7` 56 / `--with-l6 --with-l7` 76 / `--only-l7` 16 / `--only-l6 --only-l7` 36
+- L7 の certify gate(pass@1 ≥ 0.35 / combined ≥ 55)は40問時代の暫定値のままで、**16問版での再較正は未実施**
+
+---
+
 # 🆕 サブスクCLIバックエンド (`type: cli`) — Claude / Codex / Grok を定額枠で実行
 
 Claude Pro/Max・ChatGPT (Codex)・SuperGrok などのチャットサブスクは OpenAI互換APIを
@@ -34,7 +46,7 @@ QwenCloud等クラウドAPIで単発の `Read timed out` / `Connection reset` �
 | 追加/変更 | 内容 |
 |---|---|
 | 🔁 `llmbench/clients/openai_compat.py` | 通信起因の一時的失敗 (`ConnectionError` / `Timeout` / `ChunkedEncodingError` / `ConnectionResetError`) を指数バックオフで再試行。既定 2 回リトライ (合計 3 回試行)、初回遅延 2 秒 (2s → 4s)。HTTP 4xx/5xx や JSON パースエラーは retry しない (原因が呼び出し側にあり retry しても直らない)。 |
-| ⚙️ `config.yaml` | `transient_retries` / `transient_backoff` を model 別に上書き可能 (既定 2 / 2.0)。既存 config は変更不要 (デフォルト有効)。 |
+| ⚙️ `config.yaml` | `transient_retries` / `transient_backoff` を model 別に上書き可能 (既定 2 / 2.0)。既存 config は変更不要 (デフォルト有効)。 ※ 現行 config では qwen-coding のみ `transient_retries: 0` で無効化されている |
 | 📝 実装 | 既存 `_generate` を `_post_once` に rename、新しい `_generate` は retry ラッパー。既存 `LLMClient.generate` の呼び出し規約は完全互換。 |
 
 **背景**: L7 v2 の実測較正 (qwen-coding, 2026-07-21) で 16 タスク中 **3 タスク** が
@@ -91,6 +103,8 @@ L6/L7 を含めた全問実行は時間がかかるため、**先に既定40問�
 `--with-l6`/`--with-l7` は不変**です。`--only-l6`/`--only-l7` を付けたときだけ、既定台帳
 `tasks.jsonl` を除外して指定tierだけを実行します（list-tasks / run / validate 共通）。
 
+> ※ この件数は L7 v1(40問)時点のもの。L7 v2 差し替え後の現行値は `--with-l7` 56 / `--with-l6 --with-l7` 76 / `--only-l7` 16 / `--only-l6 --only-l7` 36 / `--only-l6 --with-l7` 36。
+
 | 指定 | 対象問題 | 問題数 |
 |---|---|---|
 | なし | 既定40問 | 40 |
@@ -118,7 +132,7 @@ L6/L7 を含めた全問実行は時間がかかるため、**先に既定40問�
 
 ---
 
-# 🆕 L7 grandmaster tier (t061–t100) — 任意オプション `--with-l7`
+# 🆕 L7 grandmaster tier **v1** (t061–t100) — 任意オプション `--with-l7`
 
 L6 architect でも上位帯(27B dense)がほぼ踏破し（最上位2モデル差=実質1問、生きた弁別
 タスクは t059/t047/t046/t043 の4問程度）、再び天井効果が発生。**天井評価用の40問
@@ -164,7 +178,7 @@ frontier(L5)でも上位帯(27B〜35B級)が再び天井効果を起こすため
 | 🏛️ L6 architect (t041–t060, 20問) | 複数ファイル8 / 非機能(perf)6 / 曖昧仕様4 / 罠・敵対2。issueは症状のみ |
 | 🔀 `--with-l6` / `--l6-ledger` | 別台帳 `tasks/tasks_l6.jsonl` を任意マージ（既定40 → 60）。`tasks.jsonl` は不変 |
 | 🧩 複数台帳ローダ | `load_tasks(..., ledgers=[...])`（id先勝ち）・`BenchmarkRunner(ledgers=...)` |
-| 🎓 certify L6 gate | `architect→L6`、暫定 pass@1 ≥ 55% かつ combined ≥ 60（実モデル較正で確定） |
+| 🎓 certify L6 gate | `architect→L6`、暫定 pass@1 ≥ 55% かつ combined ≥ 60（実モデル較正で確定） ※ 2026-06-26 の較正で min_success 0.60 / min_combined 58.0 に確定(現行値) |
 
 **検証**: L6 selfcheck 20/20（gold緑/buggy赤/ruff0/CC A–B）、`validate --with-l6`
 gold 20/20・broken 20/20、`list-tasks` 40（既定）/ 60（`--with-l6`）。

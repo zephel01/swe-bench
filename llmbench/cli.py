@@ -2,9 +2,13 @@
 
 使用例:
     llmbench list-tasks
+    llmbench models                                  # config定義 + Ollama稼働モデル
     llmbench run --model local-ollama
     llmbench run --model local-openai --tasks t001,t003 --lang ja
-    llmbench validate          # gold/brokenモックで自己検証
+    llmbench validate                                # gold/brokenモックで自己検証
+    llmbench certify results/<stamp>_<model>_results.json      # 使えるライン判定
+    llmbench certify --merge results/base.json results/l7.json # 分割実行を統合判定
+    llmbench compare results/a_results.json results/b_results.json  # 横断比較
 """
 
 from __future__ import annotations
@@ -44,7 +48,8 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--with-l7", action="store_true", dest="with_l7",
-        help="既定40問(+L6)に加えて L7 (grandmaster tier) の追加40問を含める",
+        help="既定40問に加えて L7 (grandmaster tier) の追加16問を含める "
+             "(L6 は含まない。併用は --with-l6 も指定)",
     )
     parser.add_argument(
         "--l7-ledger", default="tasks_l7.jsonl", dest="l7_ledger",
@@ -56,7 +61,7 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--only-l7", action="store_true", dest="only_l7",
-        help="既定40問を除外し L7 (grandmaster) の追加台帳だけを実行する",
+        help="既定40問を除外し L7 (grandmaster) の追加台帳(16問)だけを実行する",
     )
     # --- ドメイン台帳 (コーディング以外) ---
     for dom, desc in (
@@ -71,7 +76,8 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
         )
         parser.add_argument(
             f"--only-{dom}", action="store_true", dest=f"only_{dom}",
-            help=f"既定タスクを除外し {desc} 台帳だけを実行する",
+            help=f"既定タスク(tasks.jsonl)を除外して {desc} 台帳を実行する "
+                 f"(他の --with-* / --only-* を併用すればそれらも加わる)",
         )
 
 
@@ -88,8 +94,11 @@ def _ledgers(args) -> list[str]:
     """実行対象の台帳リストを決める.
 
     優先規則:
-      - `--only-l6` / `--only-l7` のいずれかが指定されたら「only モード」。
-        既定台帳 tasks.jsonl を除外し、要求された tier 台帳だけを対象にする。
+      - `--only-l6` / `--only-l7` / `--only-{sec,gen,write,med}` のいずれかが
+        指定されたら「only モード」(tier 台帳だけでなくドメイン台帳の
+        `--only-*` でも起動する)。
+        既定台帳 tasks.jsonl を除外し、要求された台帳だけを対象にする。
+        `--only-*` を複数指定すればその全てが対象になる。
       - only モードでも `--with-l6`/`--with-l7` は同 tier の追加要求として尊重する
         (実質 `--only-l6` と `--with-l6` は同義。両立しても二重追加しない)。
       - only フラグが一切無ければ従来どおり tasks.jsonl を基点に上乗せ。
@@ -197,6 +206,24 @@ def cmd_compare(args) -> int:
     return 0
 
 
+def _certify_gates(args) -> tuple[dict | None, dict | None]:
+    """config.yaml から certify 用のゲート設定を読む (失敗しても落とさない).
+
+    certify は results.json さえあれば動くのが利点なので、config が無い/壊れて
+    いる場合は既定ゲートにフォールバックする。
+    """
+    path = Path(getattr(args, "config", "config.yaml") or "config.yaml")
+    try:
+        cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        print(f"⚠️  config を読めないため既定ゲートを使います ({path}: {e})",
+              file=sys.stderr)
+        return None, None
+    dom = cfg.get("certify_domains") or None
+    med = cfg.get("certify_medical") or None
+    return dom, med
+
+
 def cmd_certify(args) -> int:
     """results.json を tier合格制で判定し「使えるライン」到達レベルを表示する."""
     import json
@@ -206,29 +233,26 @@ def cmd_certify(args) -> int:
         render_certificate_md, render_domains_md, render_medical_md,
     )
 
-    if getattr(args, "merge", False):
-        model, results = merge_results(args.results)
-        print(render_certificate_md(certify(results), model or "merged"))
-        dom = render_domains_md(certify_domains(results))
+    dom_gates, med_gates = _certify_gates(args)
+
+    def _emit(results: list[dict], model: str) -> None:
+        print(render_certificate_md(certify(results), model))
+        dom = render_domains_md(certify_domains(results, dom_gates))
         if dom:
             print("\n" + dom)
-        med = render_medical_md(certify_medical(results))
+        med = render_medical_md(certify_medical(results, med_gates))
         if med:
             print("\n" + med)
         print()
+
+    if getattr(args, "merge", False):
+        model, results = merge_results(args.results)
+        _emit(results, model or "merged")
         return 0
 
     for path in args.results:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-        results = data.get("results", [])
-        print(render_certificate_md(certify(results), data.get("model", "")))
-        dom = render_domains_md(certify_domains(results))
-        if dom:
-            print("\n" + dom)
-        med = render_medical_md(certify_medical(results))
-        if med:
-            print("\n" + med)
-        print()
+        _emit(data.get("results", []), data.get("model", ""))
     return 0
 
 
@@ -324,6 +348,11 @@ def main() -> None:
 
     p_cert = sub.add_parser("certify", help="使えるライン判定 (tier合格制)")
     p_cert.add_argument("results", nargs="+", help="判定する results.json")
+    p_cert.add_argument(
+        "--config", default="config.yaml",
+        help="ゲート設定 (certify_domains / certify_medical) を読む config。"
+             "読めない場合は既定ゲートにフォールバックする",
+    )
     p_cert.add_argument(
         "--merge", action="store_true",
         help="複数 results.json の results を合算して1つの認証を出す "

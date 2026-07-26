@@ -71,6 +71,7 @@ class TaskResult:
     success_rate: float = 0.0          # n_pass / runs
     pass_at_1: float = 0.0
     pass_at_k: float = 0.0
+    pass_k: int = 1                    # pass_at_k の実際の k (既定は runs と同値)
     attempts: list = field(default_factory=list)   # 各試行の要約 (軽量)
 
     # --- usability判定 ---
@@ -148,6 +149,8 @@ class BenchmarkRunner:
         self.quality_cfg = config.get("quality", {})
         self.scoring_cfg = config.get("scoring", {})
         self.usability_cfg = config.get("usability", {})
+        # pass@k の k (run.pass_k)。null/未設定なら runs と同値 = 従来挙動。
+        self.pass_k = self.run_cfg.get("pass_k")
         wd = self.run_cfg.get("workdir")
         self.work_root = (
             Path(wd) if wd else Path(tempfile.gettempdir()) / "llmbench_work"
@@ -431,7 +434,7 @@ class BenchmarkRunner:
                 attempts = list(ex.map(_attempt, range(runs)))
         else:
             attempts = [_attempt(i) for i in range(runs)]
-        _aggregate_attempts(tr, attempts, self.scoring_cfg)
+        _aggregate_attempts(tr, attempts, self.scoring_cfg, k=self.pass_k)
         tr.usability_tier = usability.classify(
             tr.success_rate, tr.quality_score, self.usability_cfg
         )
@@ -439,17 +442,24 @@ class BenchmarkRunner:
 
 
 def _aggregate_attempts(
-    tr: TaskResult, attempts: list[Attempt], scoring_cfg: dict
+    tr: TaskResult, attempts: list[Attempt], scoring_cfg: dict, k: int | None = None
 ) -> None:
-    """複数試行を集計し TaskResult を埋める. runs=1 なら従来値と一致する."""
+    """複数試行を集計し TaskResult を埋める. runs=1 なら従来値と一致する.
+
+    k は pass@k の k。None (既定) なら k = n となり、従来どおり
+    「1回でも成功したか」の 0/1 に退化する。k < n を指定すると
+    「k回試して1回でも成功する確率」の不偏推定として意味を持つ。
+    """
     n = len(attempts)
     passed = [a for a in attempts if a.resolved]
     c = len(passed)
 
+    k_eff = n if k is None else max(1, min(int(k), n))
     tr.n_pass = c
     tr.success_rate = round(c / n, 3) if n else 0.0
     tr.pass_at_1 = tr.success_rate
-    tr.pass_at_k = round(pass_at_k(n, c, n), 3)
+    tr.pass_k = k_eff
+    tr.pass_at_k = round(pass_at_k(n, c, k_eff), 3)
 
     # 品質: 成功試行の平均 (1つも成功しなければ0)
     tr.quality_score = round(sum(a.quality_score for a in passed) / c, 1) if c else 0.0
@@ -492,6 +502,26 @@ def _aggregate_attempts(
         }
         for a in attempts
     ]
+
+
+_UNSAFE_FILENAME_CHARS = '<>:"|?*'
+
+
+def _safe_label(name: str) -> str:
+    """モデル名/ラベルをファイル名に埋め込める形に正規化する.
+
+    Ollama では `hf.co/unsloth/Qwen3-Coder-GGUF:Q4_K_M` のようにスラッシュと
+    コロンを含むモデル名が標準的で、そのままファイル名にすると存在しない
+    ディレクトリを指して FileNotFoundError になる (採点済み結果が消える)。
+    表示用の原文は run.model 側に残し、ここでは**ファイル名専用**の slug を作る。
+    """
+    seg = str(name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    out = "".join(
+        "-" if (ch in _UNSAFE_FILENAME_CHARS or ord(ch) < 32) else ch
+        for ch in seg
+    )
+    out = out.strip(" .")
+    return out or "model"
 
 
 def _label_from_model(name: str) -> str:
@@ -580,9 +610,11 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    json_path = output_dir / f"{stamp}_{run.model}_results.json"
-    md_path = output_dir / f"{stamp}_{run.model}_report.md"
-    artifacts_dir = output_dir / f"{stamp}_{run.model}_artifacts"
+    # ファイル名にはサニタイズ済み slug を使う (run.model 自体は原文のまま)。
+    slug = _safe_label(run.model)
+    json_path = output_dir / f"{stamp}_{slug}_results.json"
+    md_path = output_dir / f"{stamp}_{slug}_report.md"
+    artifacts_dir = output_dir / f"{stamp}_{slug}_artifacts"
 
     # 生成物を別ディレクトリに保存
     _write_artifacts(run, artifacts_dir)
@@ -607,7 +639,8 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
     }
     if run.multi_run:
         # avg_success_rate=平均pass@1, solved_any_rate=N回中≥1成功
-        # avg_pass_at_k は k=runs のとき退化する点に注意
+        # avg_pass_at_k は run.pass_k で指定した k での不偏推定
+        # (k == runs のときは solved_any_rate と同義に退化する)
         summary["avg_success_rate"] = round(run.avg_success_rate, 3)
         summary["solved_any_rate"] = round(run.solved_any_rate, 3)
         summary["avg_pass_at_k"] = round(run.avg_pass_at_k, 3)

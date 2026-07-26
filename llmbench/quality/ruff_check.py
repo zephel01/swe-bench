@@ -12,7 +12,9 @@ import sys
 from pathlib import Path
 
 # バグ修正タスクの文脈で意味のあるルールに絞る
-RUFF_SELECT = "E,F,W,B,SIM,C4,S"  # pycodestyle, pyflakes, bugbear, simplify, bandit
+# E/W=pycodestyle, F=pyflakes, B=flake8-bugbear, SIM=flake8-simplify,
+# C4=flake8-comprehensions, S=flake8-bandit
+RUFF_SELECT = "E,F,W,B,SIM,C4,S"
 
 
 def ruff_score(

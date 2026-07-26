@@ -46,11 +46,11 @@ pip install -e .
 ```bash
 llmbench list-tasks            # 既定40個が一覧表示されればOK
 llmbench list-tasks --with-l6  # L6 architect 20個を加えて計60個
-llmbench list-tasks --with-l7             # L7 grandmaster 40個を加えて計80個
-llmbench list-tasks --with-l6 --with-l7   # L6+L7 両方で計100個
+llmbench list-tasks --with-l7             # L7 grandmaster 16個を加えて計56個
+llmbench list-tasks --with-l6 --with-l7   # L6+L7 両方で計76個
 llmbench list-tasks --only-l6             # 既定40問を除外し L6 architect 20個だけ
-llmbench list-tasks --only-l7             # 既定40問を除外し L7 grandmaster 40個だけ
-llmbench list-tasks --only-l6 --only-l7   # 既定40問を除外し L6+L7 だけで計60個
+llmbench list-tasks --only-l7             # 既定40問を除外し L7 grandmaster 16個だけ
+llmbench list-tasks --only-l6 --only-l7   # 既定40問を除外し L6+L7 だけで計36個
 ```
 
 ---
@@ -88,7 +88,7 @@ models:
     model: "auto"                       # サーバのロード中モデルを自動採用 (config編集不要)
     api_key: "sk-local"                 # ローカルはダミーで可
     temperature: 0.2
-    max_tokens: 4096
+    max_tokens: 24576
   local-ollama:
     type: ollama
     base_url: "http://localhost:11434"
@@ -109,6 +109,9 @@ usability:                              # ティア分類のしきい値
   autonomous: {min_success: 0.9, min_quality: 80}
   assisted:   {min_success: 0.6, min_quality: 0}
 ```
+
+> ⚠️ 推論(thinking)モデルでは `max_tokens: 4096` だと推論だけで上限に達し、パッチを出す前に
+> 生成が止まって "empty output / patch parse failed" になります。上記サンプルは `24576` にしてあります。
 
 > 💡 **`model: auto` が効くと config を二度と触らなくて済みます。** llama.cpp等でggufを
 > 差し替える → そのまま `llmbench run` するだけ。llmbench が `/v1/models` から実モデル名を
@@ -254,7 +257,7 @@ llmbench run --model local-openai --runs 5
 | ティア | 既定条件 | 運用判断 |
 |---|---|---|
 | 🟢 自律 | success ≥ 0.9 かつ quality ≥ 80 | レビューほぼ不要で任せられる |
-| 🟡 補助 | success ≥ 0.6 | レビュー前提なら使える |
+| 🟡 補助 | success ≥ 0.6 かつ quality ≥ 0(`assisted.min_quality` で変更可) | レビュー前提なら使える |
 | 🔴 不可 | 上記未満 | この種のタスクには任せられない |
 
 レポートの「usability判定」セクションには、ティア集計・**難易度×ティアの割合**・
@@ -286,8 +289,8 @@ usabilityティア比較、**タスク別Combinedマトリクス**（行内ベ�
 ## 8.5 使えるラインを判定する (`certify`)
 
 `compare` がモデル**間**の相対比較なのに対し、`certify` は1モデルの **絶対的な到達度**を
-tier合格制で出します。難易度を tier(L1-L7) にマップし、tierごとの平均成功率/combinedが
-gate を満たすかを**独立に**評価します。
+tier合格制で出します。難易度を tier(L1-L7) にマップし、tierごとに gate を満たすかを評価し、
+**独立合格tier(主判定 = L4)と累積到達レベルの2つ**を出します。
 
 ```bash
 llmbench certify results/<stamp>_<model>_results.json
@@ -302,7 +305,7 @@ llmbench certify results/<stamp>_<model>_results.json
 | L3 hard | 成功率 ≥ 75% かつ combined ≥ 60 | 実務の単純〜中級バグ |
 | **L4 expert** | **成功率 ≥ 60% かつ combined ≥ 55** | **✅ 使えるライン** |
 | L5 frontier | 成功率 ≥ 40% | フロンティア級 |
-| L6 architect | 成功率 ≥ 55% かつ combined ≥ 60 (暫定) | アーキテクト級 (上位帯の分離) |
+| L6 architect | 成功率 ≥ 60% かつ combined ≥ 58 | アーキテクト級 (上位帯の分離) |
 | L7 grandmaster | 成功率 ≥ 35% かつ combined ≥ 55 (暫定・天井評価用) | グランドマスター級 (天井評価帯) |
 
 > 閾値は `llmbench/certify.py` の `DEFAULT_GATES` で調整可能。実モデル較正で確定するのが推奨。
@@ -367,30 +370,35 @@ llmbench certify --merge results/<stamp1>_<model>_results.json \
                   results/<stamp2>_<model>_results.json
 ```
 
-### L7 (grandmaster) の追加40問を含めて実行する
+### L7 (grandmaster) の追加16問を含めて実行する
 
 L7 も既定では読まれません。`--with-l7` で別台帳 `tasks/tasks_l7.jsonl` をマージし、
-40 + 40 = 80問で評価します（`--l7-ledger` で台帳名を変更可）。`--with-l6` と併用すると
-40 + 20 + 40 = 100問になります。
+40 + 16 = 56問で評価します（`--l7-ledger` で台帳名を変更可）。`--with-l6` と併用すると
+40 + 20 + 16 = 76問になります。
 
 ```bash
-llmbench run --model local-openai --runs 5 --with-l7            # 計80問
-llmbench run --model local-openai --with-l6 --with-l7 --runs 5  # 計100問 (L6+L7)
+llmbench run --model local-openai --runs 5 --with-l7            # 計56問
+llmbench run --model local-openai --with-l6 --with-l7 --runs 5  # 計76問 (L6+L7)
 ```
 
 既定40問を除外し L7 だけを単体実行したい場合は `--only-l7` を使います。
-`--only-l6 --only-l7` を併用すると、既定40問を含めず L6+L7 の60問だけになります
+`--only-l6 --only-l7` を併用すると、既定40問を含めず L6+L7 の36問だけになります
 （`--only-l6 --with-l7` のように only と with を混ぜても、only が1つでもあれば
 既定40問は除外され、最終的な対象は only/with で要求したtierの和集合になります）。
 
 ```bash
-llmbench run --model local-openai --runs 5 --only-l7             # L7の40問だけ (baseなし)
-llmbench run --model local-openai --runs 5 --only-l6 --only-l7   # L6+L7 60問 (baseなし)
+llmbench run --model local-openai --runs 5 --only-l7             # L7の16問だけ (baseなし)
+llmbench run --model local-openai --runs 5 --only-l6 --only-l7   # L6+L7 36問 (baseなし)
 ```
 
-L7 (grandmaster) は天井評価帯 — **数値安定性**(t061-068)・**状態一貫性**(t069-076)・
-**複数結合バグ**(t077-084)・**深い並行性**(t085-092)・**敵対的パース・セキュリティ**(t093-100)
-の5軸×8問で構成されます。`t098`（ReDoS検知）のみ `perf_timeout: 30` が個別設定されています。
+> L7 (grandmaster) は天井評価帯です。旧版(40問)は上位モデルが横並びになり弁別力を失ったため、
+> 2026-07-21 に16問へ組み替えました(v2)。
+> 内訳は v1 からの残留9問(t063, t064, t068, t069, t076, t085, t092, t093, t095)と、
+> 新規7問(t101–t107)です。
+> 新規7問は「3多重oracle(独立した3つのバグを同時に直させ、部分点を出さない)」と
+> 「大規模リファクタ・仕様推論(レガシーAPIを壊さずに移行できるか)」の2系統で構成されています。
+> 旧40問は `tasks/tasks_l7_v1.jsonl` に退避してあり、`--only-l7 --l7-ledger tasks_l7_v1.jsonl`
+> で実行できます(過去結果との比較用)。
 
 ### 試行の並列実行（`--concurrency`）
 
@@ -404,7 +412,7 @@ L7 (grandmaster) は天井評価帯 — **数値安定性**(t061-068)・**状態
 # 並列計測: サーバ --parallel 5 で起動 → 試行を5並列
 llmbench run --model local-openai --runs 5 --concurrency 5
 llmbench run --model local-openai --with-l6 --runs 5 --concurrency 5   # 60タスク
-llmbench run --model local-openai --with-l6 --with-l7 --runs 5 --concurrency 5   # 100タスク
+llmbench run --model local-openai --with-l6 --with-l7 --runs 5 --concurrency 5   # 76タスク
 
 # 単発計測: サーバ --parallel 1 で起動 → 直列
 llmbench run --model local-openai --runs 5 --concurrency 1
@@ -469,6 +477,9 @@ results/
 - **4行目** `✅ RESOLVED / ❌ FAILED` — テスト判定・quality・combined・生成時間
   - 失敗時は `| ...` で **pytest出力の末尾3行** が表示され、その場で失敗理由が分かる
 
+> ⚠️ **生成時間と tok/s は非対称です**: 生成時間はパース失敗時のリトライを含む合計、
+> tok/s と生成トークン数は最終生成のみの値です。掛け算しても生成トークン数には戻りません。
+
 失敗例：
 
 ```
@@ -529,13 +540,13 @@ Issue言語: `en` / タスク数: 20 / 試行: ×5
 - 信頼性: 成功 4/5 （成功率 80% = pass@1） / 5回中≥1成功: ✓
 - 生成ファイル: word_freq.py
 - 生成物: `<stamp>_<model>_artifacts/t007/`
-- 品質内訳（下記は代表1試行の値。上のQuality は5試行の平均）:
+- 品質内訳（下記は代表1試行の値。上のQuality は成功した試行のみの平均）:
   - ruff: ✅ 指摘なし (17 LOC)
   - complexity: MI=100 / 最大複雑度ランク=A → score=100
 ```
 
 > ⚠️ **多試行時の注意**: 品質内訳（ruff/complexity）は**代表1試行**の値、Quality数値は
-> **N試行の平均**です。一致しないことがあるのは仕様（注記つきで表示されます）。
+> **成功した試行のみ**の平均です(失敗試行の品質0は分母に含まれません)。一致しないことがあるのは仕様（注記つきで表示されます）。
 
 ---
 
@@ -729,33 +740,42 @@ llmbench certify --merge results/<stamp1>_<model>_results.json \
 次のような出力が追加されます（イメージ）。
 
 ```
-## 🌐 ドメイン別
-| ドメイン | 平均成功率 | 平均combined | ゲート |
+## 🌐 ドメイン別認証 (コーディング以外)
+
+| Domain | タスク数 | 平均成功率 | 平均combined | gate(成功率/combined) | 判定 |
+|---|---|---|---|---|---|
+| 🛡️ security 検出/解析 | 4 | 72% | 68.4 | ≥60% / ≥60 | ✅合格 |
+| 📋 general 指示追従 | 3 | 81% | 75.2 | ≥70% / ≥65 | ✅合格 |
+| ✍️ writing 創作 *(experimental)* | 2 | 55% | 58.0 | ≥50% / ≥55 | ✅合格 |
+| 🩺 medical QA *(experimental)* | 24 | 67% | 63.1 | ≥60% / ≥60 | ✅合格 |
+
+**⚖️ バランス指数: 71.2 / 100** （code + security + general の調和平均。一芸特化＝あるドメインだけ低いと大きく下がる）
+> writing/medical は experimental/参考値のため、既定でバランス指数から除外。
+
+## 🩺 medical QA 詳細 (参考値・未較正)
+
+**総合正答率: 66.7%（24問）**
+> 5択MCQのチャンス正答率は約20%。これは参考値であり臨床的妥当性の保証ではない。
+
+| 難易度 | 問題数 | 正答率 | 参考gate |
 |---|---|---|---|
-| security | 72.0% | 68.4 | ✅ 合格 |
-| general  | 81.0% | 75.2 | ✅ 合格 |
-| writing  | 55.0% | 58.0 | ⚠️ experimental (未較正) |
-| medical  | 66.7% | 63.1 | 📖 reference (参考値) |
-
-⚖️ バランス指数: 71.2  (coding + security + general の調和平均。writing/medicalは既定除外)
-
-🩺 医療 正答率内訳: 全体 66.7% (16/24)
-  - med_basic: 85.7% (6/7)
-  - med_std:   63.6% (7/11)
-  - med_hard:  50.0% (3/6)
-  ※ 5択MCQのチャンス正答率は約20%。臨床的妥当性の保証ではなく参考値。
+| MED-basic 基礎 | 7 | 86% ✅ | ≥80% |
+| MED-std 標準(board) | 11 | 64% ✅ | ≥60% |
+| MED-hard 専門 | 6 | 50% ✅ | ≥40% |
 ```
 
 読み方：
 
 | 項目 | 意味 |
 |---|---|
-| **ドメイン別テーブル** | `certify_domains`（config.yaml）のしきい値に対する合否。coding tierの合否とは独立に判定される |
+| **ドメイン別テーブル** | `llmbench/certify.py` の `DEFAULT_DOMAIN_GATES`（既定値）、または `config.yaml` の `certify_domains:`（`--config` 指定時に上書き）のしきい値に対する合否。coding tierの合否とは独立に判定される。experimental/reference (writing/medical) はドメイン名に `*(experimental)*` タグが付く |
 | **バランス指数** | 測定済みドメイン（coding含む・writing/medicalは既定除外）の平均combinedの調和平均。1ドメインだけ極端に弱いモデルは算術平均より大きく下がる — 「一芸特化」を見抜く指標 |
 | **医療正答率内訳** | 全体 + 難易度別(med_basic/med_std/med_hard)。チャンス正答率(5択≈20%)との比較で「本当に知識があるか」を判断する材料にする。**参考値**であり臨床適用の根拠にはしない |
 
-`report.md` にも同内容の「🌐 ドメイン別」節が追加されます（`llmbench run --with-sec ...` 等の実行後、
-`--output` 先の `*_report.md` を確認してください）。
+`report.md` にも「🌐 ドメイン別」節(Resolved / 平均成功率 / 平均combined のみ)が追加されます。
+**ゲート判定・バランス指数・医療の難易度別内訳は `certify` の出力にのみ現れます。**
+（`llmbench run --with-sec ...` 等の実行後、`--output` 先の `*_report.md` を確認してください）。
 
-> writing/medical のゲート閾値は暫定（未較正）です。判定基準は `llmbench/certify.py` の
-> `DEFAULT_DOMAIN_GATES` / `DEFAULT_MED_GATES`、または `config.yaml` の `certify_domains:` で調整できます。
+> writing/medical のゲート閾値は暫定（未較正）です。ドメイン別ゲートは `llmbench/certify.py` の
+> `DEFAULT_DOMAIN_GATES` が既定値で、`config.yaml` の `certify_domains:` で上書きできます
+> (`llmbench certify --config config.yaml` を指定した場合)。医療の難易度別gateは `DEFAULT_MED_GATES` で調整可能。

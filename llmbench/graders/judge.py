@@ -71,9 +71,15 @@ class JudgeGrader(Grader):
         hard = run_checks(answer, rubric.get("hard_constraints", []))
         hard_pass = all(r["passed"] for r in hard)
         hard_failed = [f"{r['kind']}({r['detail']})" for r in hard if not r["passed"]]
-        pass_score = float(
-            ctx.graders_cfg.get("judge", {}).get("pass_score", rubric.get("pass_score", 7.0))
-        )
+        # 優先順: タスク個別の rubric.json > config の graders.judge > 既定 7.0。
+        # config に既定値が常駐しているため、逆順にすると rubric 側の
+        # タスク別合格点が永久に無視される。
+        if rubric.get("pass_score") is not None:
+            pass_score = float(rubric["pass_score"])
+        else:
+            pass_score = float(
+                ctx.graders_cfg.get("judge", {}).get("pass_score", 7.0)
+            )
 
         comp = {
             "enabled": True, "judged": False,

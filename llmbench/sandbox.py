@@ -1,8 +1,9 @@
 """隔離実行: タスクの一時コピー作成とpytest実行.
 
-v1はvenv + subprocess方式。タスクはstdlib-onlyなので、llmbench自身の
-実行環境のPython (pytest入り) をそのまま使う。元タスクディレクトリは
-一切変更しない (一時コピーにのみpatchを適用する)。
+v1は subprocess 方式 (venv は作らない)。タスクはstdlib-onlyなので、llmbench自身の
+実行環境のPython (pytest入り) をそのまま使う。
+隔離されるのは**ファイルシステム上の作業ディレクトリのみ**で、プロセス/パッケージ
+の隔離は無い (元タスクディレクトリは一切変更せず、一時コピーにのみpatchを適用する)。
 """
 
 from __future__ import annotations

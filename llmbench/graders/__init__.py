@@ -105,3 +105,17 @@ GRADER_DOMAIN = {
     "judge": "writing",
     "qa": "medical",
 }
+
+
+def check_domains() -> dict[str, tuple[str, str]]:
+    """`Grader.domain` と `GRADER_DOMAIN` の食い違いを列挙する.
+
+    両者がズレると、台帳が domain を明示していないタスクが誤ったドメインの
+    ゲートで判定されうる (例: 医療QAが general ゲート 0.70/65.0 で判定される)。
+    戻り値: {grader名: (Grader.domain, GRADER_DOMAIN の値)} — 一致していれば空。
+    """
+    return {
+        name: (get_grader(name).domain, expected)
+        for name, expected in GRADER_DOMAIN.items()
+        if get_grader(name).domain != expected
+    }

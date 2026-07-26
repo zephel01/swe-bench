@@ -1,4 +1,4 @@
-# 🧩 タスク仕様書 — t001〜t040 (+ L6 architect t041〜t060 / L7 grandmaster t061〜t100)
+# 🧩 タスク仕様書 — t001〜t040 (+ L6 architect t041〜t060 / L7 grandmaster v2・16問)
 
 各タスクが**何を調査しているか**(LLMのどの能力を測るか)と**採点基準**の一覧。
 
@@ -219,7 +219,7 @@
 | t047 migration_runner | runner.py + graph.py | 適用記録が非原子的で後続を誤適用扱い | 部分失敗時の整合性 |
 | t048 http_router | router.py + params.py | 型変換なし・ワイルドカードが具体ルートを覆う | ルーティング優先規則+型 |
 
-### 非機能要件 (t049〜t054) — `perf_timeout` 系
+### 非機能要件 (t049〜t054)
 
 | ID | 構成 | 仕込んだバグ | 主に測る力 |
 |---|---|---|---|
@@ -251,12 +251,77 @@
 
 ---
 
-## L7 grandmaster (t061〜t100) — 任意オプション `--with-l7` / 単体実行 `--only-l7`
+## L7 grandmaster (v2・16問) — 任意オプション `--with-l7` / 単体実行 `--only-l7`
+
+L1〜L6 の60問が最上位帯 (27B dense級) にほぼ踏破され、**最上位2モデルの差が実質1問**まで
+縮小した (L6較正で天井効果が再発)。これを解消するために2026-07に投入したのが旧L7
+(t061〜t100、40問・5軸×8問構成) だったが、上位クラウドモデル2機種の実測で再び天井効果が
+発生し (40問中32問が Combined 差3pt未満)、弁別力を失った。そこで2026-07-21に **v2 (16問)**
+へ差し替えた。既定の40問評価にも `--with-l6` にも含まれず、別台帳 `tasks/tasks_l7.jsonl` に
+置かれ `--with-l7` 指定時のみ評価される (`--with-l6` と独立に併用可。`difficulty=grandmaster`
+→ certify では **L7**)。位置づけは「使えるラインの判定」ではなく、現行モデル群の**頭打ちを
+検出する天井評価帯**。既定40問(+L6)を除いて L7 だけを実行したい場合は `--only-l7` を使う
+（`--only-l6 --only-l7` でL6+L7のみ計36問）。
+
+v2 の16問は、旧40問のうち弁別力が残っていた**v1残留9問**(t063, t064, t068, t069, t076,
+t085, t092, t093, t095) と、**新規7問**(t101〜t107) で構成する。gate は暫定
+**pass@1 ≥ 0.35 かつ combined ≥ 55**(旧40問時代の暫定値のままで、16問版での再較正は未実施)。
+
+### v2 の設計軸
+
+新規7問は次の2つの設計軸で構成する:
+
+- **3多重oracle** (t101, t102, t104): 独立した3つのバグを同時に仕込み、1つでも直し漏れたら
+  部分点なしで0点。表面的なパターンマッチによる部分修正を許さない
+- **大規模リファクタ/仕様推論** (t103, t105, t106, t107): レガシーAPIを壊さずに新形式へ移行
+  できるか。t103 は `buggy_code/` `gold/` 自体を持たない新形式で、ゼロからファイル一式を
+  書き起こさせる
+
+### 現行L7 (v2・16問) 一覧
+
+| ID | dir | 由来 | 何を測るか |
+|---|---|---|---|
+| t063 | roots (quadratic_roots) | v1軸A | 桁落ち(cancellation)回避 |
+| t064 | allocate (money_allocate) | v1軸A | 丸め規約と総和保存 |
+| t068 | geo (haversine) | v1軸A | 近傍条件数・公式選択 |
+| t069 | saga_compensation | v1軸B | saga補償の部分失敗耐性 |
+| t076 | optimistic_lock | v1軸B | 複数キーCASの全か無か |
+| t085 | lock_order | v1軸D | ロック順序デッドロック |
+| t092 | rw_reentrant | v1軸D | reader-writer再入 |
+| t093 | path_canon | v1軸E | 多層デコード後の封じ込め |
+| t095 | confusable_label | v1軸E | confusables/混在script |
+| t101 | t101_log_rotator_3bug | 新規 | ログローテータの3つの症状を3ファイル横断で同時修正(3多重oracle) |
+| t102 | t102_templated_email_render_3bug | 新規 | メールフォーマッタの独立した3バグを同時修正(3多重oracle) |
+| t103 | t103_legacy_api_preservation | 新規 | `search()` のシグネチャ移行。レガシーAPIを壊さずに新形式を追加 |
+| t104 | t104_csv_dialect_detect_3bug | 新規 | CSV方言自動判定の独立3バグ(3多重oracle) |
+| t105 | t105_schema_migration_backward_compat | 新規 | `User.name` を first_name/last_name に分割し旧JSONも読めるようにする |
+| t106 | t106_multi_file_consistency_refactor | 新規 | User識別子の型を4ファイル横断で `str` に統一 |
+| t107 | t107_contract_extension_no_break | 新規 | `parse()` に strict モードを追加し既存呼び出しを壊さない |
+
+v1残留9問の詳細(仕込んだバグ・調査対象の全文)は後述の「## L7 v1 (退避済み・t061–t100)」内の
+該当行を参照(内容は変更されていない)。
+
+新規7問のテスト構成は問ごとに異なる: t101・t102・t104 は `test_bug.py` のみ、t103 は
+`test_bug.py` のみ (かつ `buggy_code/` `gold/` 自体が無い新形式)、t105 は `test_bug.py` +
+`test_consistency.py`。旧v1の「全問が `test_core.py`(回帰罠) と `test_bug.py`(バグ捕捉) を持つ」
+という構成は v2 の新規7問には当てはまらない (v1残留9問は旧構成のまま)。
+
+> 検証: `llmbench validate --with-l7`(mock-gold 16/16・mock-broken 16/16)。`pytest tests/` 61 passed。
+> 各問のバグ本質は `tasks/tasks_l7.jsonl` を参照。
+
+---
+
+## L7 v1 (退避済み・t061–t100)
+
+現在は `tasks/tasks_l7_v1.jsonl` にあり、`--l7-ledger tasks_l7_v1.jsonl` で実行できる。
+2026-07-21 の v2 差し替えで既定の `tasks_l7.jsonl` からは外れたが、旧40問の再測定・過去結果
+との継続比較のために台帳としては残してあり、以下は歴史的資料としてそのまま保持する
+(削除しない)。
 
 L1〜L6 の60問が最上位帯 (27B dense級) にほぼ踏破され、**最上位2モデルの差が実質1問**まで
 縮小した (L6較正で天井効果が再発)。これを解消するための**追加40問**。既定の40問評価にも
-`--with-l6` にも含まれず、別台帳 `tasks/tasks_l7.jsonl` に置かれ `--with-l7` 指定時のみ評価
-される (`--with-l6` と独立に併用可。`difficulty=grandmaster` → certify では **L7**)。位置づけは
+`--with-l6` にも含まれず、別台帳 `tasks/tasks_l7.jsonl`(当時) に置かれ `--with-l7` 指定時のみ
+評価される (`--with-l6` と独立に併用可。`difficulty=grandmaster` → certify では **L7**)。位置づけは
 「使えるラインの判定」ではなく、現行モデル群の**頭打ちを検出する天井評価帯**。既定40問(+L6)を
 除いて L7 だけを実行したい場合は `--only-l7` を使う（`--only-l6 --only-l7` でL6+L7のみ計60問）。
 
@@ -343,9 +408,10 @@ L6 の t053/t057/t060 を深掘り。敵対入力下で不変条件(ディレク
 | t099 tar_slip | safe_member_path | `normpath+startswith`(区切りなし)で prefix共有の兄弟通過・POSIXで `\` 生存。`\`畳み・絶対/ドライブ拒否・`dest+sep` 前置要求(FSアクセスなし) | tar-slip(アーカイブ脱出) |
 | t100 format_inject | safe_format | `str.format` 直呼びで `{x.__class__…__globals__}`/`{obj[key]}` に到達。`Formatter().parse` で `.`/`[`/ネストフィールドを拒否 | format文字列注入 |
 
-> 検証: `python3 _OUTPUTS/llm-bench-l7/scripts/selfcheck_l7.py`(gold緑/buggy赤/隠密性/ruff0 の
-> 40/40 PASS)、`llmbench validate --with-l7`(mock-gold 40/40・mock-broken 40/40)、既存テスト23 passed。
-> 各問のバグ本質は `tasks/tasks_l7.jsonl` と `_OUTPUTS/llm-bench-l7/design/axis_*.md` に対応。
+> 検証(v1当時): `python3 _OUTPUTS/llm-bench-l7/scripts/selfcheck_l7.py`(gold緑/buggy赤/隠密性/ruff0 の
+> 40/40 PASS)、`llmbench validate --with-l7`(mock-gold 40/40・mock-broken 40/40)、既存テスト23 passed
+> (いずれも v1・40問構成時点の記録。現行 v2・16問の検証は前節を参照)。
+> 各問のバグ本質は `tasks/tasks_l7_v1.jsonl` と `_OUTPUTS/llm-bench-l7/design/axis_*.md` に対応。
 
 ---
 
@@ -357,20 +423,21 @@ L6 の t053/t057/t060 を深掘り。敵対入力下で不変条件(ディレク
 | 言語特有の罠 | t003 (mutable default), t011 (OrderedDict), t014 (heapq) |
 | 仕様文からの実装補完 | t004, t007, t010, t015 |
 | エッジケース設計 | t005, t001(n=0), t004(空), t007(記号のみ) |
-| 複数ファイルのバグ局所化 + 無関係コード不変更 | t012, t014, t015, t033-t040, t041-t048, t069-t084 |
+| 複数ファイルのバグ局所化 + 無関係コード不変更 | t012, t014, t015, t033-t040, t041-t048, t069-t084 (v1), t106 |
 | 明示的制約の遵守 | t014 (FIFO維持), t015 (非破壊) |
-| regression検出 (隠しテストが本体も再検証) | t008, t011, t012, t013, t033-t060 (test_core), t061-t100 (隠密性=test_core) |
+| regression検出 (隠しテストが本体も再検証) | t008, t011, t012, t013, t033-t060 (test_core), t061-t100 (隠密性=test_core・v1) |
 | 仕様の細部理解・アルゴリズム正確性 | t021-t032 (expert) |
-| 症状からの原因診断 (issueに修正手順なし) | t021-t100 |
-| 複数の結合バグ (片方修正では通らない) | t035, t037, t039, t040, t077-t084 (各2バグ) |
-| 性能制約 (perf_timeout) | t039, t040, t045, t049-t052, t059, t098 |
+| 症状からの原因診断 (issueに修正手順なし) | t021-t060、L7 v1残留9問(t063・t064・t068・t069・t076・t085・t092・t093・t095)、t101・t102・t104 |
+| 複数の結合バグ / 3多重oracle (部分修正は不合格) | t035, t037, t039, t040, t077-t084 (各2バグ・t077-t084はv1)、t101, t102, t104 (各3バグ・3多重oracle) |
+| 大規模リファクタ/仕様推論 (レガシーAPI非破壊) | t103, t105, t106, t107 (L7 v2新設) |
+| 性能制約 (perf_timeout) | t039, t040, t045, t049-t052, t059, t098(v1) |
 | リポジトリ規模の診断・設計判断 (architect) | t041-t060 (--with-l6) |
 | 曖昧仕様からの意図抽出 / 敵対入力・数値安定性 | t055-t058 / t053, t059, t060 |
-| 数値解析の失敗様式 (桁落ち・overflow・条件数) | t061-t068 (L7軸A) |
-| 長い操作列・部分失敗での状態不変条件 | t069-t076 (L7軸B) |
-| 決定的に捕捉する複合並行性 (デッドロック/競合/リーク) | t085-t092 (L7軸D) |
-| 敵対的パース・セキュリティ文脈・Unicode正規化 | t093-t100 (L7軸E) |
-| 天井評価帯 (grandmaster・現行モデル群の頭打ち検出) | t061-t100 (--with-l7) |
+| 数値解析の失敗様式 (桁落ち・overflow・条件数) | t061-t068 (L7軸A・v1) |
+| 長い操作列・部分失敗での状態不変条件 | t069-t076 (L7軸B・v1) |
+| 決定的に捕捉する複合並行性 (デッドロック/競合/リーク) | t085-t092 (L7軸D・v1) |
+| 敵対的パース・セキュリティ文脈・Unicode正規化 | t093-t100 (L7軸E・v1) |
+| 天井評価帯 (grandmaster・現行モデル群の頭打ち検出) | L7現行16問 (--with-l7、v1残留9問+t101-t107) |
 | 検出・過検出への頑健性 (precision/recall/F1、デコイ) | s01-s04 (--with-sec、マルチドメイン) |
 | 指示追従・制約遵守 (IFEval式の機械検証) | g01-g03 (--with-gen、マルチドメイン) |
 | 文章品質 (rubric+judge、experimental) | w01-w02 (--with-write、マルチドメイン) |

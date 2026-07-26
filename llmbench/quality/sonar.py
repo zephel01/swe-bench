@@ -43,12 +43,14 @@ def sonar_score(workspace: Path, cfg: dict) -> tuple[float | None, dict]:
     # 解析完了待ち (簡易ポーリング)
     issues = _poll_issues(host, token, project_key)
     penalty = sum(
-        SEVERITY_PENALTY.get(i.get("severity", "INFO"), 0.5) for i in issues
+        SEVERITY_PENALTY.get(i.get("severity") or "INFO", 0.5) for i in issues
     )
     score = max(0.0, 100.0 - penalty)
     by_sev: dict[str, int] = {}
     for i in issues:
-        by_sev[i.get("severity", "INFO")] = by_sev.get(i.get("severity"), 0) + 1
+        # 読み書きで同じキーを使う (severity 欠落時に INFO が毎回1へ戻るのを防ぐ)
+        sev = i.get("severity") or "INFO"
+        by_sev[sev] = by_sev.get(sev, 0) + 1
     return score, {"issues": len(issues), "by_severity": by_sev,
                    "project_key": project_key}
 

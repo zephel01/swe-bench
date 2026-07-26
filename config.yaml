@@ -32,7 +32,7 @@ models:
   qwen-coding:
     type: openai
     base_url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
-    model: "qwen3.7-max"   # 非思考コーダー(推奨)。qwen3.7-max等の思考モデルはstream必須でllmbench非対応
+    model: "qwen3.6-flash"   # 非思考コーダー(推奨)。qwen3.7-max等の思考モデルはstream必須でllmbench非対応
     api_key: "${DASHSCOPE_CODING_API_KEY}" 
     temperature: 0.2
     max_tokens: 24576                # reasoning出力に備え大きめ
@@ -136,7 +136,11 @@ run:
   test_timeout: 120       # pytest実行のタイムアウト(秒/タスク)
   generate_retries: 1     # パース失敗時の再生成回数
   workdir: null           # 一時作業ディレクトリ (null = システムtemp配下)
-  runs: 1                 # 各タスクの試行回数 (>1 で pass@k・成功率を計測)
+  runs: 1                 # 各タスクの試行回数 (>1 で成功率を計測。pass@k は下の pass_k 参照)
+  pass_k: null            # pass@k の k。null = runs と同値 (このとき pass@k は
+                          #   「1回でも成功したか」の0/1に退化し solved_any_rate と同義)。
+                          #   k < runs にすると「k回試して1回でも成功する確率」の
+                          #   不偏推定として意味を持つ (例: runs: 5, pass_k: 2)
   sample_temp: 0.8        # 複数試行(runs>1)時のサンプリング温度
   concurrency: 1          # 試行(runs)の同時実行数。llama.cpp を --parallel N -cb で起動時に >1 で総時間短縮(既定1=直列)
   # ollama_host: "http://localhost:11434"  # Ollama接続先 (config未定義モデルの自動解決に使用)
@@ -164,16 +168,21 @@ quality:
     reviewer_model: local-openai   # models: のキーを指定
   sonarqube:
     enabled: false        # SonarQubeサーバ稼働時のみ true
-    weight: 0.0           # 有効化時に重みを再配分すること
+    # ⚠️ enabled: true にする際は必ず weight を正の値にすること
+    #    (0 のままだと実行はされるがスコアに寄与しない)。
+    #    重みは有効レイヤーだけで自動再正規化されるので合計を1に揃える必要はない。
+    weight: 0.0
     host_url: "http://localhost:9000"
     token: ""
   judge:                  # judge grader (創作/writing) の採点モデル
     enabled: false        # 別系統の judge を起動しているとき true (self-preference回避に judge≠候補)
     judge_model: local-openai
-    seeds: 1              # 1問を何回採点して平均するか (>1 で judge一致率を計測)
+    # 1問を何回採点して平均するか。>1 で scores/spread(最大−最小)を記録し
+    # judge のブレを可視化する (「一致率」という指標は算出していない)。
+    seeds: 1
 
 scoring:
-  # combined = success_rate * (floor + (1 - floor) * quality / 100)
+  # combined = success_rate * (floor + (1 - floor) * quality / 100) * 100
   # 動かないコードは0点。動くコードは品質で floor*100 〜 100 点に分布
   # (runs>1 では resolved の代わりに success_rate でスケールする)
   quality_floor: 0.5
@@ -189,7 +198,9 @@ graders:
   # コーディング以外のドメイン採点器のしきい値 (DESIGN_DOMAINS.md 参照)
   detection: {pass_f1: 0.67}     # 検出: F1 がこの値以上で resolved
   constraint: {pass_ratio: 1.0}  # 指示追従: 全チェック通過で resolved (instruction-strict)
-  judge: {pass_score: 7.0}       # 創作: judge 平均スコア(0-10)がこの値以上で resolved
+  # 創作: judge 平均スコア(0-10)がこの値以上で resolved。
+  # タスクの rubric.json に pass_score があればそちらが優先される。
+  judge: {pass_score: 7.0}
 
 certify_domains:
   # ドメイン別「使えるライン」ゲート (暫定。実モデル較正で確定)。
@@ -197,3 +208,11 @@ certify_domains:
   general:  {min_success: 0.7, min_combined: 65}
   writing:  {min_success: 0.5, min_combined: 55, experimental: true}   # 未較正
   medical:  {min_success: 0.6, min_combined: 60, reference: true}      # 参考値
+
+certify_medical:
+  # medical QA の難易度別 参考gate (正答率のしきい値)。
+  # ⚠️ すべて未較正の参考値であり、臨床的妥当性の保証ではない。
+  #    5択MCQのチャンス正答率は約20%。実モデル較正で確定するまでの暫定値。
+  med_basic: 0.80   # 基礎
+  med_std:   0.60   # 標準 (board)
+  med_hard:  0.40   # 専門
