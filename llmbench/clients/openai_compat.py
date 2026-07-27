@@ -122,10 +122,48 @@ class OpenAICompatClient(LLMClient):
             )
         data = resp.json()
         usage = data.get("usage", {}) or {}
+        completion_tokens = usage.get("completion_tokens")
+        message = data["choices"][0]["message"]
+        content = message.get("content") or ""
+        text = content
+        if not content.strip():
+            # 推論(thinking)系モデル対策: llama.cpp/vLLM等はreasoning_format設定時、
+            # <think>...</think> を reasoning_content (別フィールド) に分離し、
+            # </think> を閉じる前に生成が終わると content が空のまま返ってくる。
+            # 答えがreasoning側に紛れ込んでいる場合があるのでフォールバックで拾う。
+            reasoning = (
+                message.get("reasoning_content") or message.get("reasoning") or ""
+            )
+            if reasoning.strip():
+                text = reasoning
+                print(
+                    f"⚠️ {self.name}: content が空。reasoning_content "
+                    f"({len(reasoning)}文字) にフォールバックしてパースを試みます",
+                    file=sys.stderr,
+                )
+            elif completion_tokens and completion_tokens >= self.max_tokens:
+                print(
+                    f"⚠️ {self.name}: 出力が空 (content/reasoning_content とも空) — "
+                    f"completion_tokens={completion_tokens} が max_tokens="
+                    f"{self.max_tokens} に到達しています。推論(thinking)が予算内に"
+                    "完了しなかった可能性が高いです"
+                    "(対策: max_tokens引き上げ、または推論の抑制を検討)",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"⚠️ {self.name}: 出力が空 (content/reasoning_content とも空、"
+                    f"completion_tokens={completion_tokens}, max_tokens未到達) — "
+                    "生成が早期に停止した可能性があります",
+                    file=sys.stderr,
+                )
+            if not text.strip():
+                # 空白のみのcontentも空として扱う(patch.py側の判定と揃える)
+                text = ""
         return GenerationResult(
-            text=data["choices"][0]["message"]["content"],
+            text=text,
             prompt_tokens=usage.get("prompt_tokens"),
-            completion_tokens=usage.get("completion_tokens"),
+            completion_tokens=completion_tokens,
             raw=data,
         )
 

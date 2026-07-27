@@ -1,3 +1,37 @@
+# 🔍 推論(thinking)モデル対策: reasoning_content フォールバック + 空出力の診断ログ (2026-07-27)
+
+推論系モデル(Fara1.5等)をllama.cpp/vLLM経由で測定した際、`empty output` 判定になるタスクが
+多発する問題を調査・修正した。原因は `reasoning_format` 設定時に `<think>...</think>` が
+`message.content` とは別の `reasoning_content` フィールドへ分離されるが、`</think>` を閉じる前に
+生成が打ち切られると `content` が空のまま返り、実際には妥当な回答が `reasoning_content` 側に
+入っていてもベンチ側は「空出力」としてスコアを0扱いにしていた点。
+
+- `llmbench/clients/openai_compat.py`: `content` が空文字/空白のみの場合に
+  `reasoning_content`(無ければ `reasoning`)へフォールバックしてパースを試みるよう変更
+- フォールバックでも空だった場合は原因切り分け用の診断ログを出し分け:
+  `completion_tokens >= max_tokens` なら「予算内に完了しなかった可能性」、
+  それ未満なら「生成が早期に停止した可能性」と明示
+- `tests/test_reasoning_fallback.py` を新規追加(7件): 通常content・reasoning_contentフォールバック・
+  reasoningキーでのフォールバック・予算切れ警告・早期停止警告・completion_tokens報告・空白のみcontentの正規化
+
+**検証(実測)**: 修正前後で同一タスクセット(40問)を再実行して比較。
+
+| 指標 | 修正前 | 修正後 |
+|---|---|---|
+| Resolved率 | 42.5% (17/40) | 95.0% (38/40) |
+| Combined平均 | 40.0 | 88.0 |
+| Usability (自律/補助/不可) | 15 / 2 / 23 | 30 / 8 / 2 |
+| 品質平均 | 88.3 | 85.2 |
+
+修正前に `empty output` だった22問のうち21問が修正後に解決(天井到達で打ち切られていたケースを含む)。
+残る2問(t020, t037)は `parse_ok=True` であり、reasoning分離とは無関係な純粋なロジックバグと判明。
+品質平均のわずかな低下(88.3→85.2)は、従来スコア対象外だった空出力タスクが新たに採点対象へ
+加わったことによる希釈であり、既存タスクの品質そのものが劣化したわけではない。
+
+`pytest tests/` 全件パス、`ruff check` クリーンを確認済み。
+
+---
+
 # 🏆 L7 grandmaster tier v2 へ差し替え (2026-07-21)
 
 旧L7(t061–t100, 40問)は上位クラウドモデル2機種の実測で天井効果が再発し(40問中32問が Combined 差3pt未満)、弁別力を失っていたため台帳を組み替えた。
