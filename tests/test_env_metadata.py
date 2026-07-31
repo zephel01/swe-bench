@@ -787,6 +787,102 @@ def test_save_run_without_environment_stays_backward_compatible(tmp_path):
     assert "## 🖥 実行環境" not in md_path.read_text(encoding="utf-8")
 
 
+# ─────────────── compare: ハードウェア比較モード ───────────────
+#
+# 同一モデルを別ハードで測った場合、「環境が違うから tok/s 比較不可」は裏返し。
+# モデルを固定してハードを比べているのだから tok/s が主役になる。
+
+
+def _hw_run(device, compute, tps, ngl=99, n_ctx=16384, model="Ornith-9B-Q6_K"):
+    return {
+        "model": model, "issue_lang": "en",
+        "summary": {"resolved_rate": 1.0, "avg_quality_resolved": 88.6,
+                    "avg_combined": 94.3, "runs": 1, "usability": {},
+                    "tokens_per_sec": tps},
+        "results": [{"task_id": "t001", "difficulty": "easy", "title": "a",
+                     "combined": 94.3, "tokens_per_sec": tps}],
+        "environment": {
+            "execution": "local",
+            "host": {"cpu": "AMD RYZEN AI MAX+ 395", "ram_gb": 31.0,
+                     "gpu": [{"name": "NVIDIA GeForce RTX 3090",
+                              "vendor": "nvidia"}]},
+            "backend": {"kind": "llama.cpp", "quantization": "Q6_K",
+                        "runtime": {"compute": compute},
+                        "launch": {"device_name": device, "n_gpu_layers": ngl,
+                                   "n_ctx": n_ctx, "parallel": 1}},
+        },
+    }
+
+
+# 実機の4本 (同一モデル・-ngl 99・n_ctx 16384 で条件を揃えたもの)
+_HW_RUNS = [
+    _hw_run("NVIDIA GeForce RTX 5090", "CUDA", 149.5),
+    _hw_run("NVIDIA GeForce RTX 3090", "CUDA", 63.7),
+    _hw_run("AMD Radeon 8060S Graphics", "ROCm", 26.5),
+    _hw_run("Radeon 8060S Graphics (RADV GFX1151)", "Vulkan", 23.7),
+]
+
+
+def test_hardware_comparison_is_detected_and_ranked_by_speed():
+    from llmbench.compare import render_comparison
+
+    md = render_comparison(_HW_RUNS)
+    assert "# 🆚 ハードウェア比較レポート" in md
+    assert "## 🖥 ハードウェア比較（モデル固定）" in md
+    # 「比較不可」の警告は出さない (それが今回の主目的なので)
+    assert "測定環境が揃っていません" not in md
+    assert "条件（量子化 / -ngl / n_ctx / 並列）が全環境で一致" in md
+    # tok/s 降順に並ぶ
+    order = [md.index(d) for d in ("RTX 5090", "RTX 3090",
+                                   "AMD Radeon 8060S Graphics",
+                                   "RADV GFX1151")]
+    assert order == sorted(order)
+    assert "| 149.5 | 100% |" in md.replace("  ", " ") or "149.5" in md
+
+
+def test_hardware_comparison_flags_mismatched_conditions():
+    """-ngl 0 (CPU実行) を混ぜたら速度差をハード差として読ませない."""
+    from llmbench.compare import render_comparison
+
+    runs = [_HW_RUNS[0],
+            _hw_run("AMD Radeon 8060S Graphics", "ROCm", 27.5, ngl=0,
+                    n_ctx=32768)]
+    md = render_comparison(runs)
+    assert "推論条件が揃っていません" in md
+    assert "-ngl" in md and "n_ctx" in md
+    assert "GPU を使っていません" in md
+
+
+def test_hardware_mode_labels_rows_by_device_not_model():
+    """モデル名が全行同じなので、ランキング列はデバイス名で区別する."""
+    from llmbench.compare import render_comparison
+
+    md = render_comparison(_HW_RUNS)
+    ranking = md[md.index("## ランキング"):md.index("## 🖥 ハードウェア比較")]
+    assert "NVIDIA GeForce RTX 5090 (CUDA)" in ranking
+    assert "Radeon 8060S Graphics (RADV GFX1151) (Vulkan)" in ranking
+
+
+def test_model_comparison_mode_is_unchanged_when_models_differ():
+    from llmbench.compare import render_comparison
+
+    runs = [_HW_RUNS[0], _hw_run("NVIDIA GeForce RTX 5090", "CUDA", 90.0,
+                                 model="other-model")]
+    md = render_comparison(runs)
+    assert "# 🆚 モデル比較レポート" in md
+    assert "ハードウェア比較" not in md
+
+
+def test_compare_uses_summary_tokens_per_sec():
+    """summary に速度があればそれを使う (results[] の再集計に依存しない)."""
+    from llmbench.compare import _run_tps
+
+    assert _run_tps({"summary": {"tokens_per_sec": 42.0}, "results": []}) == 42.0
+    assert _run_tps({"summary": {},
+                     "results": [{"tokens_per_sec": 10.0},
+                                 {"tokens_per_sec": 20.0}]}) == 15.0
+
+
 def test_compare_warns_on_mixed_environments():
     from llmbench.compare import render_comparison
 

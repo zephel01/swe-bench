@@ -29,6 +29,14 @@ def _avg_tps(results: list[dict]) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
+def _run_tps(run: dict) -> float | None:
+    """summary の値を優先し、無ければ results[] から平均する."""
+    s = (run.get("summary") or {}).get("tokens_per_sec")
+    if s:
+        return float(s)
+    return _avg_tps(run.get("results", []))
+
+
 def _task_index(runs: list[dict]) -> dict[str, dict]:
     """task_id -> {difficulty, title} (最初に見つかったものを採用)."""
     idx: dict[str, dict] = {}
@@ -43,16 +51,124 @@ def _task_index(runs: list[dict]) -> dict[str, dict]:
     return idx
 
 
+def _device_label(env: dict) -> str:
+    """その実行で実際に使われたデバイス名 (無ければ搭載GPU/CPU)."""
+    backend = env.get("backend") or {}
+    launch = backend.get("launch") or {}
+    if launch.get("device_name"):
+        return str(launch["device_name"])
+    inf = (backend.get("gpu_usage") or {}).get("inference") or {}
+    real = [g.get("name") for g in inf.get("gpus", [])
+            if not g.get("context_only")]
+    if real:
+        return " + ".join(str(n) for n in real)
+    host = env.get("host") or {}
+    gpus = host.get("gpu") or []
+    if gpus:
+        return str(gpus[0].get("name", "?"))
+    return str(host.get("cpu") or "—")
+
+
+def _compute_label(env: dict) -> str:
+    backend = env.get("backend") or {}
+    rt = backend.get("runtime") or {}
+    return str(rt.get("compute") or backend.get("kind") or "—")
+
+
+def _bench_conditions(env: dict) -> dict:
+    """tok/s の比較可否を左右する推論条件 (ここが揃って初めて比較が成立する)."""
+    backend = env.get("backend") or {}
+    launch = backend.get("launch") or {}
+    return {
+        "量子化": backend.get("quantization"),
+        "-ngl": launch.get("n_gpu_layers"),
+        "n_ctx": launch.get("n_ctx") or backend.get("n_ctx"),
+        "並列": launch.get("parallel") or backend.get("parallel_slots"),
+    }
+
+
+def _fmt_conditions(cond: dict) -> str:
+    parts = [f"{k} {v}" for k, v in cond.items() if v is not None]
+    return " / ".join(parts) or "—"
+
+
 def _env_signature(env: dict) -> str:
-    """同一環境で測ったかの判定キー (ホスト + バックエンド構成)."""
+    """同一環境で測ったかの判定キー.
+
+    ホストのスペックだけでは足りない。**同じマシンでも**使ったデバイスや
+    計算バックエンドが違えば別環境なので (実機: 1台に RTX 5090 / RTX 3090 /
+    Radeon 8060S が同居し、CUDA / ROCm / Vulkan を切り替えて測る)、
+    実際に測った条件までキーに含める。
+    """
     host = env.get("host") or {}
     backend = env.get("backend") or {}
     gpu = ",".join(str(g.get("name", "")) for g in (host.get("gpu") or []))
+    cond = _bench_conditions(env)
     return "|".join(str(x) for x in (
         env.get("execution", ""), host.get("cpu", ""), gpu,
         host.get("ram_gb", ""), backend.get("kind", ""),
-        backend.get("quantization", ""), backend.get("n_ctx", ""),
+        _compute_label(env), _device_label(env),
+        cond["量子化"], cond["-ngl"], cond["n_ctx"], cond["並列"],
     ))
+
+
+def is_hardware_comparison(rows: list[dict]) -> bool:
+    """「同じモデルを別のハードで測った」比較かを判定する.
+
+    このとき tok/s は**主役**であって「環境が違うから比較不可」ではない。
+    逆にモデルが混在していれば従来どおりモデル比較として扱う。
+    """
+    envs = [r for r in rows if r.get("env")]
+    if len(envs) < 2:
+        return False
+    models = {r["model"] for r in envs}
+    sigs = {_env_signature(r["env"]) for r in envs}
+    return len(models) == 1 and len(sigs) > 1
+
+
+def _hardware_section(rows: list[dict]) -> list[str]:
+    """ハードウェア比較モード: モデル固定で tok/s を主役に出す."""
+    envs = [r for r in rows if r.get("env")]
+    ranked = sorted(envs, key=lambda r: r["tps"] or 0, reverse=True)
+    best = ranked[0]["tps"] or 0
+    lines = [
+        "", "## 🖥 ハードウェア比較（モデル固定）", "",
+        f"モデル `{ranked[0]['model']}` を {len(envs)} 環境で測定。"
+        "速度が比較の主役なので tok/s 降順で並べます。", "",
+        "| # | デバイス | 計算バックエンド | tok/s | 相対 | 推論条件 |",
+        "|---|---|---|---|---|---|",
+    ]
+    for i, r in enumerate(ranked, 1):
+        env = r["env"]
+        tps = r["tps"]
+        rel = f"{tps / best * 100:.0f}%" if tps and best else "—"
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "")
+        lines.append(
+            f"| {i}{medal} | **{_device_label(env)}** | {_compute_label(env)} "
+            f"| {tps:.1f} | {rel} "
+            f"| {_fmt_conditions(_bench_conditions(env))} |"
+            if tps is not None else
+            f"| {i}{medal} | **{_device_label(env)}** | {_compute_label(env)} "
+            f"| — | — | {_fmt_conditions(_bench_conditions(env))} |"
+        )
+
+    # ★ 速度比較が成立するのは推論条件が揃っているときだけ。
+    #   実測で -ngl 0 (CPU実行) と -ngl 99 を比べて結論が逆転した事故があった。
+    conds = [_bench_conditions(r["env"]) for r in envs]
+    differing = sorted({k for k in conds[0]
+                        if len({str(c.get(k)) for c in conds}) > 1})
+    if differing:
+        lines += ["", f"> ⚠️ **推論条件が揃っていません（{', '.join(differing)}）。**"
+                      "この状態の tok/s 差はハードの差ではありません。"
+                      "特に `-ngl` が 0 の実行は GPU を使っていません。"]
+    else:
+        lines += ["", "> ✅ 推論条件（量子化 / -ngl / n_ctx / 並列）が全環境で"
+                      "一致しています。tok/s の差はハードとバックエンドの差です。"]
+    if len(envs) < len(rows):
+        lines += ["", "> ⚠️ 実行環境が記録されていない results は表から除外して"
+                      "います (旧バージョンで生成)。"]
+    lines.append("")
+    return lines
 
 
 def _env_compare_section(rows: list[dict]) -> list[str]:
@@ -61,6 +177,9 @@ def _env_compare_section(rows: list[dict]) -> list[str]:
     if not envs:
         return ["", "> ⚠️ 実行環境が記録されていない results があります "
                     "(旧バージョンで生成)。tok/s の比較には注意。"]
+    # 同一モデル × 別ハード なら「比較不可」ではなく「ハード比較」が目的
+    if is_hardware_comparison(rows):
+        return _hardware_section(rows)
     lines = ["", "## 🖥 実行環境", "",
              "| モデル | 実行形態 | ハード / 推論構成 |", "|---|---|---|"]
     for r in rows:
@@ -104,7 +223,7 @@ def render_comparison(runs: list[dict]) -> str:
             "passk": s.get("avg_pass_at_k"),
             "quality": s.get("avg_quality_resolved", 0.0),
             "combined": s.get("avg_combined", 0.0),
-            "tps": _avg_tps(run.get("results", [])),
+            "tps": _run_tps(run),
             "usability": s.get("usability", {}),
             "env": run.get("environment") or {},
             "results": {r["task_id"]: r for r in run.get("results", [])},
@@ -113,10 +232,22 @@ def render_comparison(runs: list[dict]) -> str:
     best = rows[0]["combined"] or 1.0
     any_multi = any(r["runs"] > 1 for r in rows)
 
+    # 同一モデル × 別ハードの比較では、モデル名が全行同じで区別できないので
+    # 表示ラベルをデバイス名に切り替える。
+    hardware = is_hardware_comparison(rows)
+    for r in rows:
+        env = r.get("env") or {}
+        r["label"] = (
+            f"{_device_label(env)} ({_compute_label(env)})" if hardware and env
+            else r["model"]
+        )
+
     lines = [
-        "# 🆚 モデル比較レポート",
+        "# 🆚 ハードウェア比較レポート" if hardware else "# 🆚 モデル比較レポート",
         "",
-        f"対象モデル: {len(rows)} / 生成: {time.strftime('%Y-%m-%d %H:%M')}",
+        (f"モデル `{rows[0]['model']}` / 環境: {len(rows)}"
+         if hardware else f"対象モデル: {len(rows)}")
+        + f" / 生成: {time.strftime('%Y-%m-%d %H:%M')}",
         "",
         "## ランキング（Combined平均 降順）",
         "",
@@ -140,7 +271,7 @@ def render_comparison(runs: list[dict]) -> str:
         tps = f"{r['tps']:.1f}" if r["tps"] else "—"
         medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "")
         lines.append(
-            f"| {i}{medal} | **{r['model']}** | {r['lang']} "
+            f"| {i}{medal} | **{r['label']}** | {r['lang']} "
             f"| {r['resolved'] * 100:.1f}% {mid}"
             f"| {r['quality']:.1f} | {r['combined']:.1f} "
             f"| {rel:.0f}% | {tps} |"
@@ -155,7 +286,7 @@ def render_comparison(runs: list[dict]) -> str:
     for r in rows:
         u = r["usability"] or {}
         lines.append(
-            f"| {r['model']} | {u.get('autonomous', 0)} "
+            f"| {r['label']} | {u.get('autonomous', 0)} "
             f"| {u.get('assisted', 0)} | {u.get('unusable', 0)} |"
         )
 
@@ -163,7 +294,7 @@ def render_comparison(runs: list[dict]) -> str:
     idx = _task_index(runs)
     lines += ["", "## タスク別 Combined マトリクス", "",
               "各セルはそのタスクの Combined。行内の最高値を **太字**。", ""]
-    header = "| Task | 難易度 | " + " | ".join(r["model"] for r in rows) + " |"
+    header = "| Task | 難易度 | " + " | ".join(r["label"] for r in rows) + " |"
     lines += [header, "|---|---|" + "---|" * len(rows)]
     for tid in sorted(idx):
         diff = idx[tid]["difficulty"]
