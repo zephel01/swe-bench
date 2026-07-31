@@ -127,29 +127,36 @@ def is_hardware_comparison(rows: list[dict]) -> bool:
 
 
 def _hardware_section(rows: list[dict]) -> list[str]:
-    """ハードウェア比較モード: モデル固定で tok/s を主役に出す."""
+    """ハードウェア比較モード: モデル固定で tok/s を主役に出す.
+
+    Combined ランキングは併記しない。全環境で同じモデルを走らせている以上
+    Combined はほぼ同点になり、順位も「相対」も意味を持たないため
+    (同点だと入力順のまま並び、速い環境が下に来て誤解を生む)。
+    品質列は「どの環境でも同じ結果が出たか」の健全性確認として残す。
+    """
     envs = [r for r in rows if r.get("env")]
     ranked = sorted(envs, key=lambda r: r["tps"] or 0, reverse=True)
     best = ranked[0]["tps"] or 0
     lines = [
-        "", "## 🖥 ハードウェア比較（モデル固定）", "",
+        "", "## 🖥 ランキング（tok/s 降順）", "",
         f"モデル `{ranked[0]['model']}` を {len(envs)} 環境で測定。"
-        "速度が比較の主役なので tok/s 降順で並べます。", "",
-        "| # | デバイス | 計算バックエンド | tok/s | 相対 | 推論条件 |",
-        "|---|---|---|---|---|---|",
+        "速度が比較の主役なので tok/s 降順で並べます"
+        "（Resolved / 品質は環境によらず一致するのが正常）。", "",
+        "| # | デバイス | 計算バックエンド | tok/s | 相対 "
+        "| Resolved | 品質 | 推論条件 |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for i, r in enumerate(ranked, 1):
         env = r["env"]
         tps = r["tps"]
-        rel = f"{tps / best * 100:.0f}%" if tps and best else "—"
         medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "")
+        speed = f"{tps:.1f}" if tps is not None else "—"
+        rel = f"{tps / best * 100:.0f}%" if tps and best else "—"
         lines.append(
             f"| {i}{medal} | **{_device_label(env)}** | {_compute_label(env)} "
-            f"| {tps:.1f} | {rel} "
+            f"| {speed} | {rel} "
+            f"| {r['resolved'] * 100:.1f}% | {r['quality']:.1f} "
             f"| {_fmt_conditions(_bench_conditions(env))} |"
-            if tps is not None else
-            f"| {i}{medal} | **{_device_label(env)}** | {_compute_label(env)} "
-            f"| — | — | {_fmt_conditions(_bench_conditions(env))} |"
         )
 
     # ★ 速度比較が成立するのは推論条件が揃っているときだけ。
@@ -210,6 +217,13 @@ def render_comparison(runs: list[dict]) -> str:
     if not runs:
         return "# モデル比較\n\n(結果がありません)\n"
 
+    # 結果0件の results は列を作るだけで比較の役に立たないので外す
+    # (中断した run や空振りの run が glob で混ざりやすい)
+    empty = [r for r in runs if not r.get("results")]
+    runs = [r for r in runs if r.get("results")]
+    if not runs:
+        return "# モデル比較\n\n(結果がありません)\n"
+
     # モデルごとのサマリを取り出し、combined降順でランキング
     rows = []
     for run in runs:
@@ -241,6 +255,15 @@ def render_comparison(runs: list[dict]) -> str:
             f"{_device_label(env)} ({_compute_label(env)})" if hardware and env
             else r["model"]
         )
+    # 同じデバイス×バックエンドで複数回測ることがあるので、ラベル重複には
+    # 連番を振る (マトリクスの列が区別できなくなるのを防ぐ)
+    seen: dict[str, int] = {}
+    dup = {lbl for lbl in (r["label"] for r in rows)
+           if list(r["label"] for r in rows).count(lbl) > 1}
+    for r in rows:
+        if r["label"] in dup:
+            seen[r["label"]] = seen.get(r["label"], 0) + 1
+            r["label"] = f"{r['label']} #{seen[r['label']]}"
 
     lines = [
         "# 🆚 ハードウェア比較レポート" if hardware else "# 🆚 モデル比較レポート",
@@ -249,9 +272,19 @@ def render_comparison(runs: list[dict]) -> str:
          if hardware else f"対象モデル: {len(rows)}")
         + f" / 生成: {time.strftime('%Y-%m-%d %H:%M')}",
         "",
-        "## ランキング（Combined平均 降順）",
-        "",
     ]
+    if empty:
+        names = ", ".join(f"`{r.get('_path', r.get('model', '?'))}`"
+                          for r in empty)
+        lines += [f"> ⚠️ 結果0件のため除外: {names}", ""]
+
+    # ハードウェア比較では Combined ランキングは同点になり順位が意味を持たない
+    # ので出さない (速い環境が下に並んで誤解を生む)。速度ランキングで代替する。
+    if hardware:
+        return "\n".join(lines + _hardware_section(rows)
+                         + _usability_and_matrix(rows, runs)) + "\n"
+
+    lines += ["## ランキング（Combined平均 降順）", ""]
     # ヘッダ
     head = "| # | モデル | 言語 | Resolved "
     sep = "|---|---|---|---|"
@@ -279,10 +312,16 @@ def render_comparison(runs: list[dict]) -> str:
 
     # 実行環境の併記 (tok/s は測定環境が違うと比較できないため必須)
     lines += _env_compare_section(rows)
+    lines += _usability_and_matrix(rows, runs)
+    lines += ["", "> 相対 = 各モデルのCombined ÷ 最良モデルのCombined。",
+              "> 参照モデル(強/弱)を併置すると、ローカルモデルの位置が読み取れる。"]
+    return "\n".join(lines) + "\n"
 
-    # usabilityティア比較
-    lines += ["", "## usabilityティア比較", "",
-              "| モデル | 🟢 自律 | 🟡 補助 | 🔴 不可 |", "|---|---|---|---|"]
+
+def _usability_and_matrix(rows: list[dict], runs: list[dict]) -> list[str]:
+    """usabilityティア比較 + タスク別 Combined マトリクス (両モード共通)."""
+    lines = ["", "## usabilityティア比較", "",
+             "| 対象 | 🟢 自律 | 🟡 補助 | 🔴 不可 |", "|---|---|---|---|"]
     for r in rows:
         u = r["usability"] or {}
         lines.append(
@@ -294,13 +333,12 @@ def render_comparison(runs: list[dict]) -> str:
     idx = _task_index(runs)
     lines += ["", "## タスク別 Combined マトリクス", "",
               "各セルはそのタスクの Combined。行内の最高値を **太字**。", ""]
-    header = "| Task | 難易度 | " + " | ".join(r["label"] for r in rows) + " |"
-    lines += [header, "|---|---|" + "---|" * len(rows)]
+    lines += ["| Task | 難易度 | " + " | ".join(r["label"] for r in rows) + " |",
+              "|---|---|" + "---|" * len(rows)]
     for tid in sorted(idx):
         diff = idx[tid]["difficulty"]
         cells = []
-        present = [r["results"].get(tid) for r in rows]
-        vals = [p.get("combined") if p else None for p in present]
+        vals = [(r["results"].get(tid) or {}).get("combined") for r in rows]
         bestval = max([v for v in vals if v is not None], default=None)
         for v in vals:
             if v is None:
@@ -310,10 +348,7 @@ def render_comparison(runs: list[dict]) -> str:
             else:
                 cells.append(f"{v:.0f}")
         lines.append(f"| {tid} | {diff} | " + " | ".join(cells) + " |")
-
-    lines += ["", "> 相対 = 各モデルのCombined ÷ 最良モデルのCombined。",
-              "> 参照モデル(強/弱)を併置すると、ローカルモデルの位置が読み取れる。"]
-    return "\n".join(lines) + "\n"
+    return lines
 
 
 def save_comparison(

@@ -850,16 +850,19 @@ def test_hardware_comparison_is_detected_and_ranked_by_speed():
 
     md = render_comparison(_HW_RUNS)
     assert "# 🆚 ハードウェア比較レポート" in md
-    assert "## 🖥 ハードウェア比較（モデル固定）" in md
+    assert "## 🖥 ランキング（tok/s 降順）" in md
     # 「比較不可」の警告は出さない (それが今回の主目的なので)
     assert "測定環境が揃っていません" not in md
     assert "条件（量子化 / -ngl / n_ctx / 並列）が全環境で一致" in md
+    # ★ Combined ランキングは出さない。全環境同点で順位が意味を持たず、
+    #   速い環境が下に並んで誤解を生むため (実機のレポートで確認)
+    assert "Combined平均 降順" not in md
     # tok/s 降順に並ぶ
     order = [md.index(d) for d in ("RTX 5090", "RTX 3090",
                                    "AMD Radeon 8060S Graphics",
                                    "RADV GFX1151")]
     assert order == sorted(order)
-    assert "| 149.5 | 100% |" in md.replace("  ", " ") or "149.5" in md
+    assert "149.5" in md
 
 
 def test_hardware_comparison_flags_mismatched_conditions():
@@ -876,13 +879,43 @@ def test_hardware_comparison_flags_mismatched_conditions():
 
 
 def test_hardware_mode_labels_rows_by_device_not_model():
-    """モデル名が全行同じなので、ランキング列はデバイス名で区別する."""
+    """モデル名が全行同じなので、表の列はデバイス名で区別する."""
     from llmbench.compare import render_comparison
 
     md = render_comparison(_HW_RUNS)
-    ranking = md[md.index("## ランキング"):md.index("## 🖥 ハードウェア比較")]
-    assert "NVIDIA GeForce RTX 5090 (CUDA)" in ranking
-    assert "Radeon 8060S Graphics (RADV GFX1151) (Vulkan)" in ranking
+    matrix = md[md.index("## タスク別 Combined マトリクス"):]
+    assert "NVIDIA GeForce RTX 5090 (CUDA)" in matrix
+    assert "Radeon 8060S Graphics (RADV GFX1151) (Vulkan)" in matrix
+
+
+def test_duplicate_device_labels_get_numbered():
+    """同じデバイス×バックエンドを複数回測ってもマトリクスの列を区別できる."""
+    from llmbench.compare import render_comparison
+
+    runs = [_HW_RUNS[0],
+            _hw_run("NVIDIA GeForce RTX 5090", "CUDA", 118.2),
+            _HW_RUNS[2]]
+    md = render_comparison(runs)
+    assert "NVIDIA GeForce RTX 5090 (CUDA) #1" in md
+    assert "NVIDIA GeForce RTX 5090 (CUDA) #2" in md
+    # 重複していないラベルには連番を振らない
+    assert "AMD Radeon 8060S Graphics (ROCm) #" not in md
+
+
+def test_empty_results_are_excluded_and_reported():
+    """結果0件の results は列を作るだけなので除外し、除外した旨を明示する."""
+    from llmbench.compare import render_comparison
+
+    empty = {"model": "Ornith-9B-Q6_K", "issue_lang": "en",
+             "summary": {"resolved_rate": 0.0, "avg_combined": 0.0,
+                         "n_tasks": 0, "runs": 1, "usability": {}},
+             "results": [], "_path": "20260731_dead_results.json"}
+    md = render_comparison([*_HW_RUNS, empty])
+    assert "結果0件のため除外" in md
+    assert "20260731_dead_results.json" in md
+    # 空の run が列やランキングに混ざらない
+    assert md.count("| 0.0% |") == 0
+    assert "4 環境で測定" in md
 
 
 def test_model_comparison_mode_is_unchanged_when_models_differ():
