@@ -251,13 +251,24 @@ def collect_gpu_usage() -> dict:
             by_pid.items(), key=lambda kv: sum(s["vram_gb"] for s in kv[1])
         )
         shards = sorted(shards, key=lambda s: s["gpu_index"] or 0)
+        total = sum(s["vram_gb"] for s in shards)
+        # 選択していない GPU にも CUDA/HIP コンテキスト分の数百MiB が載る
+        # (実機: --device CUDA0 なのに 3090 側へ 256MiB)。これを「分割ロード」と
+        # 数えると誤報になるので、ごく小さい取り分はコンテキストとして区別する。
+        floor = max(0.5, total * 0.05)
+        shard_gpus = [
+            {"index": s["gpu_index"], "name": s["gpu_name"],
+             "vram_gb": s["vram_gb"],
+             **({"context_only": True} if s["vram_gb"] < floor else {})}
+            for s in shards
+        ]
         inference = {
             "pid": pid,
             "process": shards[0]["process"],
-            "vram_total_gb": round(sum(s["vram_gb"] for s in shards), 1),
-            "multi_gpu": len(shards) > 1,
-            "gpus": [{"index": s["gpu_index"], "name": s["gpu_name"],
-                      "vram_gb": s["vram_gb"]} for s in shards],
+            "vram_total_gb": round(total, 1),
+            "multi_gpu": sum(
+                1 for g in shard_gpus if not g.get("context_only")) > 1,
+            "gpus": shard_gpus,
         }
         if not infer:
             # プロセス名が既知の推論サーバに一致しない = 別用途の可能性がある
@@ -512,28 +523,94 @@ def _vulkan_device_names() -> list[str]:
             for m in re.finditer(r"deviceName\s*=\s*(.+)", out)]
 
 
-def resolve_device(dev: str, host_gpus: list[dict]) -> dict:
-    """``ROCm0`` / ``Vulkan2`` / ``CUDA0`` を実GPU名に解決する."""
-    m = re.fullmatch(r"([A-Za-z]+)(\d+)", (dev or "").strip())
-    if not m:
-        return {"device": dev} if dev else {}
-    kind, idx = m.group(1), int(m.group(2))
-    info: dict = {"device": dev, "device_kind": kind, "device_index": idx}
-    low = kind.lower()
-    if low in ("cuda", "rocm", "hip"):
-        vendor = "nvidia" if low == "cuda" else "amd"
-        pool = [g for g in host_gpus if g.get("vendor") == vendor]
-        if idx < len(pool):
-            info["device_name"] = pool[idx].get("name")
-    elif low == "vulkan":
-        names = _vulkan_device_names()
-        if idx < len(names):
-            info["device_name"] = names[idx]
-        elif idx < len(host_gpus):
-            # vulkaninfo が無い環境。ggml の Vulkan 列挙順は概ね PCI 順なので
-            # 搭載順で当てるが、確証がないことを明示する。
-            info["device_name"] = host_gpus[idx].get("name")
+# llama.cpp --list-devices の1行。ggml バックエンドを問わず
+#   "  CUDA0: NVIDIA GeForce RTX 5090 (32149 MiB, 31610 MiB free)"
+# の形式。名前に括弧が入る例 ("AMD Radeon Graphics (RADV GFX1151)") があるので、
+# メモリ括弧は行末側に固定し、名前は最小一致で受ける。
+_LIST_DEVICES_RE = re.compile(
+    r"^\s*(\S+):\s*(.+?)\s*\((\d+)\s*MiB,\s*(\d+)\s*MiB free\)\s*$"
+)
+
+
+def list_devices(binary: str) -> list[dict]:
+    """``<llama-server> --list-devices`` でデバイス ID → 名前の対応を取る.
+
+    **これが唯一の正解**。CUDA の既定デバイス順は ``FASTEST_FIRST`` で
+    nvidia-smi の PCI バス順とは違う (実機: nvidia-smi GPU0=RTX 3090 だが
+    CUDA0=RTX 5090)。ベンダ別の一覧を添字で引くと逆になる。ROCm / Vulkan も
+    ビルドごとに別の名前空間なので、実行ファイルに聞くのが確実。
+    """
+    out = _sh([binary, "--list-devices"], timeout=15.0)
+    devices = []
+    for line in (out or "").splitlines():
+        m = _LIST_DEVICES_RE.match(line)
+        if not m:
+            continue
+        devices.append({
+            "id": m.group(1),
+            "name": m.group(2),
+            "vram_total_gb": round(int(m.group(3)) / 1024, 1),
+            "vram_free_gb": round(int(m.group(4)) / 1024, 1),
+        })
+    return devices
+
+
+def resolve_device(
+    dev: str,
+    host_gpus: list[dict],
+    binary: str | None = None,
+    devices: list[dict] | None = None,
+) -> dict:
+    """``ROCm0`` / ``Vulkan2`` / ``CUDA0,CUDA1`` を実GPU名に解決する.
+
+    ``--list-devices`` の結果 (``devices``、無ければ ``binary`` から取得) を
+    正とする。CUDA / ROCm / Vulkan すべて同じ経路で解決できるので、
+    バックエンドごとの分岐は要らない。取れなかった場合だけベンダ別一覧の
+    添字で推定し、``device_name_uncertain`` を立てる (CUDA の既定順は
+    FASTEST_FIRST で nvidia-smi の PCI 順と違うため、推定は外れうる)。
+    """
+    dev = (dev or "").strip()
+    if not dev:
+        return {}
+    ids = [d.strip() for d in dev.split(",") if d.strip()]
+    info: dict = {"device": dev}
+
+    if devices is None:
+        devices = list_devices(binary) if binary else []
+    table = {d["id"]: d for d in devices}
+    resolved: list[dict] = []
+    uncertain = False
+    for did in ids:
+        if did in table:
+            resolved.append({"id": did, "name": table[did]["name"],
+                             "vram_total_gb": table[did]["vram_total_gb"]})
+            continue
+        m = re.fullmatch(r"([A-Za-z]+)(\d+)", did)
+        if not m:
+            continue
+        kind, idx = m.group(1).lower(), int(m.group(2))
+        name = None
+        if kind == "vulkan":
+            names = _vulkan_device_names()
+            name = names[idx] if idx < len(names) else None
+        if name is None:
+            # フォールバック: ベンダ別一覧の添字。CUDA は FASTEST_FIRST 順
+            # なので PCI 順の一覧とはずれることがある → 必ず uncertain。
+            vendor = "nvidia" if kind == "cuda" else (
+                "amd" if kind in ("rocm", "hip") else None)
+            pool = ([g for g in host_gpus if g.get("vendor") == vendor]
+                    if vendor else host_gpus)
+            name = pool[idx].get("name") if idx < len(pool) else None
+            uncertain = name is not None
+        if name:
+            resolved.append({"id": did, "name": name})
+    if resolved:
+        info["devices"] = resolved
+        info["device_name"] = " + ".join(d["name"] for d in resolved)
+        if uncertain:
             info["device_name_uncertain"] = True
+        elif table:
+            info["device_name_source"] = "--list-devices"
     return info
 
 
@@ -546,9 +623,16 @@ def collect_launch(pid: int | None, host_gpus: list[dict] | None = None) -> dict
         return {}
     launch = parse_server_args(argv)
     launch["command"] = _redact_argv(argv)
+    # デバイス一覧は起動に使った実行ファイル自身に聞くのが正しい
+    # (CUDA0 は nvidia-smi の GPU0 とは限らず、ID の名前空間はビルドごとに別)。
+    # CUDA / ROCm / Vulkan で経路が共通なのでバックエンド分岐は不要。
+    devices = list_devices(_proc_exe(pid) or argv[0])
+    if devices:
+        launch["available_devices"] = devices
     dev = launch.pop("device", None)
     if dev:
-        launch.update(resolve_device(str(dev), host_gpus or []))
+        launch.update(resolve_device(str(dev), host_gpus or [],
+                                     devices=devices))
     env = _proc_visible_env(pid)
     if env:
         launch["visible_devices_env"] = env

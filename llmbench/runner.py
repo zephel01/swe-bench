@@ -650,6 +650,15 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
         "runs": run.runs,
         "usability": {t: overall.get(t, 0) for t in usability.TIERS},
     }
+    # 速度指標も summary に置く。従来はタスク単位 (results[]) にしか無く、
+    # summary だけを読む外部ツール (CodeRouter のスイープ結果パネル等) から
+    # 速度が見えなかった。キー名は汎用の tokens_per_sec / avg_latency_ms。
+    tps = [r.tokens_per_sec for r in run.results if r.tokens_per_sec]
+    if tps:
+        summary["tokens_per_sec"] = round(sum(tps) / len(tps), 1)
+    lat = [r.latency_sec for r in run.results if r.latency_sec]
+    if lat:
+        summary["avg_latency_ms"] = round(sum(lat) / len(lat) * 1000)
     if run.multi_run:
         # avg_success_rate=平均pass@1, solved_any_rate=N回中≥1成功
         # avg_pass_at_k は run.pass_k で指定した k での不偏推定

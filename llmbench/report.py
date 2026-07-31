@@ -137,7 +137,10 @@ def _env_section(env: dict) -> list[str]:
         if launch.get("device_name"):
             val += f" — {launch['device_name']}"
             if launch.get("device_name_uncertain"):
-                val += " (列挙順からの推定)"
+                val += (" ⚠️ 列挙順からの推定 "
+                        "(CUDA の番号は nvidia-smi の並びと一致しません)")
+            elif launch.get("device_name_source"):
+                val += f" ({launch['device_name_source']} で確認)"
         rows.append(("使用デバイス", val))
     ngl = launch.get("n_gpu_layers")
     if ngl is not None:
@@ -161,6 +164,7 @@ def _env_section(env: dict) -> list[str]:
     if inf.get("gpus"):
         shards = " + ".join(
             f"GPU{g.get('index')} {g.get('name', '?')} {g.get('vram_gb', 0)}GB"
+            + ("(コンテキストのみ)" if g.get("context_only") else "")
             for g in inf["gpus"]
         )
         val = shards

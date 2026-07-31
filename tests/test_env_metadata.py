@@ -456,12 +456,78 @@ def test_launch_command_redacts_secrets():
     assert "--api-key ***" in cmd and "--port 8085" in cmd
 
 
+# 実機の `llama-server --list-devices` 出力 (CUDA ビルド)。
+# ★ CUDA の既定順は FASTEST_FIRST なので CUDA0 が RTX 5090。
+#   nvidia-smi は PCI バス順で GPU0 が RTX 3090 → 添字で引くと逆になる。
+_LIST_DEVICES_CUDA = (
+    "Available devices:\n"
+    "  CUDA0: NVIDIA GeForce RTX 5090 (32149 MiB, 31610 MiB free)\n"
+    "  CUDA1: NVIDIA GeForce RTX 3090 (24123 MiB, 23800 MiB free)\n"
+)
+_LIST_DEVICES_VULKAN = (
+    "Available devices:\n"
+    "  Vulkan0: NVIDIA GeForce RTX 3090 (24576 MiB, 24000 MiB free)\n"
+    "  Vulkan1: NVIDIA GeForce RTX 5090 (32607 MiB, 32000 MiB free)\n"
+    "  Vulkan2: AMD Radeon Graphics (RADV GFX1151) (114166 MiB, 113602 MiB free)\n"
+)
+
+
+def test_list_devices_parses_nested_parens_in_name(monkeypatch):
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: _LIST_DEVICES_VULKAN)
+    devs = envinfo.list_devices("/x/llama-server")
+    assert [d["id"] for d in devs] == ["Vulkan0", "Vulkan1", "Vulkan2"]
+    # 名前中の括弧を巻き込まず、行末のメモリ括弧だけを切り出す
+    assert devs[2]["name"] == "AMD Radeon Graphics (RADV GFX1151)"
+    assert devs[2]["vram_total_gb"] == 111.5
+
+
+@pytest.mark.parametrize("dev,expected", [
+    ("CUDA0", "NVIDIA GeForce RTX 5090"),
+    ("CUDA1", "NVIDIA GeForce RTX 3090"),
+])
+def test_cuda_device_order_is_not_nvidia_smi_order(monkeypatch, dev, expected):
+    """CUDA0 = 5090。nvidia-smi の GPU0(=3090) と取り違えない (実機で踏んだ回帰).
+
+    --list-devices が正。ベンダ別一覧の添字で引くと逆になる。
+    """
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: _LIST_DEVICES_CUDA)
+    r = envinfo.resolve_device(dev, _HOST_GPUS, binary="/x/llama-server")
+    assert r["device_name"] == expected
+    assert r["device_name_source"] == "--list-devices"
+    assert "device_name_uncertain" not in r
+
+
+def test_resolve_device_handles_multiple_ids(monkeypatch):
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: _LIST_DEVICES_CUDA)
+    r = envinfo.resolve_device("CUDA0,CUDA1", _HOST_GPUS,
+                               binary="/x/llama-server")
+    assert r["device_name"] == "NVIDIA GeForce RTX 5090 + NVIDIA GeForce RTX 3090"
+    assert [d["id"] for d in r["devices"]] == ["CUDA0", "CUDA1"]
+
+
+def test_rocm_and_vulkan_resolve_through_the_same_path(monkeypatch):
+    """ROCm / Vulkan も --list-devices で解決する (バックエンド分岐なし)."""
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: _LIST_DEVICES_VULKAN)
+    r = envinfo.resolve_device("Vulkan2", [], binary="/x/llama-server")
+    assert r["device_name"] == "AMD Radeon Graphics (RADV GFX1151)"
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: (
+        "  ROCm0: AMD Radeon 8060S Graphics (98304 MiB, 25600 MiB free)\n"))
+    r = envinfo.resolve_device("ROCm0", [], binary="/x/llama-server")
+    assert r["device_name"] == "AMD Radeon 8060S Graphics"
+
+
+def test_fallback_guess_is_marked_uncertain():
+    """--list-devices が取れないときの添字推定は必ず uncertain を立てる."""
+    r = envinfo.resolve_device("CUDA0", _HOST_GPUS)   # binary なし
+    assert r["device_name_uncertain"] is True
+
+
 @pytest.mark.parametrize("dev,expected", [
     ("ROCm0", "AMD Radeon 8060S Graphics"),
     ("CUDA0", "NVIDIA GeForce RTX 3090"),
     ("CUDA1", "NVIDIA GeForce RTX 5090"),
 ])
-def test_resolve_device_maps_to_real_gpu(dev, expected):
+def test_resolve_device_falls_back_to_vendor_index(dev, expected):
     assert envinfo.resolve_device(dev, _HOST_GPUS)["device_name"] == expected
 
 
@@ -531,6 +597,31 @@ def test_nvidia_attribution_suppressed_for_non_cuda_runtime(monkeypatch):
     assert "Vulkan" in backend["gpu_usage"]["note"]
     # 代わりに起動引数由来のデバイスが残る
     assert backend["launch"]["device"] == "Vulkan2"
+
+
+def test_context_only_shard_is_not_counted_as_split(monkeypatch):
+    """--device CUDA0 でも未選択GPUに数百MiBのコンテキストが載る.
+
+    実機: 5090 に 7650MiB / 3090 に 256MiB。これを「2枚に分割ロード」と
+    報告するのは誤りなので、ごく小さい取り分はコンテキストとして区別する。
+    """
+    def _sh(cmd, timeout=None):
+        if cmd[0] != "nvidia-smi":
+            return None
+        j = " ".join(cmd)
+        if "--query-compute-apps" in j:
+            return ("GPU-aaaa, 3684862, /x/build-cuda/bin/llama-server, 256\n"
+                    "GPU-bbbb, 3684862, /x/build-cuda/bin/llama-server, 7650")
+        if "--query-gpu" in j:
+            return ("GPU-aaaa, 0, NVIDIA GeForce RTX 3090, 280, 24576\n"
+                    "GPU-bbbb, 1, NVIDIA GeForce RTX 5090, 7661, 32607")
+        return None
+
+    monkeypatch.setattr(envinfo, "_sh", _sh)
+    inf = envinfo.collect_gpu_usage()["inference"]
+    assert inf["multi_gpu"] is False          # 分割ロードではない
+    assert inf["gpus"][0]["context_only"] is True   # 3090 = 0.2GB
+    assert "context_only" not in inf["gpus"][1]     # 5090 = 7.5GB
 
 
 def test_cuda_runtime_keeps_nvidia_attribution(monkeypatch):
@@ -655,6 +746,36 @@ def test_save_run_embeds_environment(tmp_path):
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["environment"]["execution"] == "mock"
     assert "## 🖥 実行環境" in md_path.read_text(encoding="utf-8")
+
+
+def test_summary_carries_speed_metrics(tmp_path):
+    """summary だけを読む外部ツール (CodeRouter 等) から速度が見えること."""
+    from llmbench.runner import RunResult, TaskResult, save_run
+
+    run = RunResult(model="m", issue_lang="en")
+    run.results = [
+        TaskResult(task_id="t1", difficulty="easy", title="a",
+                   tokens_per_sec=30.0, latency_sec=2.0),
+        TaskResult(task_id="t2", difficulty="easy", title="b",
+                   tokens_per_sec=40.0, latency_sec=4.0),
+        # 速度が取れなかったタスクは分母に入れない
+        TaskResult(task_id="t3", difficulty="easy", title="c"),
+    ]
+    payload = json.loads(
+        save_run(run, tmp_path)[0].read_text(encoding="utf-8"))
+    assert payload["summary"]["tokens_per_sec"] == 35.0
+    assert payload["summary"]["avg_latency_ms"] == 3000
+
+
+def test_summary_omits_speed_metrics_when_unavailable(tmp_path):
+    from llmbench.runner import RunResult, TaskResult, save_run
+
+    run = RunResult(model="m", issue_lang="en")
+    run.results = [TaskResult(task_id="t1", difficulty="easy", title="a")]
+    summary = json.loads(
+        save_run(run, tmp_path)[0].read_text(encoding="utf-8"))["summary"]
+    assert "tokens_per_sec" not in summary
+    assert "avg_latency_ms" not in summary
 
 
 def test_save_run_without_environment_stays_backward_compatible(tmp_path):

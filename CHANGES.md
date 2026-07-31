@@ -1,3 +1,37 @@
+# 🎯 デバイス解決を --list-devices に一本化 (CUDA番号の取り違え修正) (2026-07-31)
+
+RTX 3090 + RTX 5090 の実機で `--device CUDA0` を指定した実行が、レポートに
+**RTX 3090** と表示された。実際は RTX 5090 で動いており(nvidia-smi の実測で
+5090 に 7650MiB / 3090 に 256MiB)、逆に読めていた。
+
+原因は **CUDA のデバイス番号を nvidia-smi の並びで引いていた**こと。CUDA の既定
+デバイス順は `FASTEST_FIRST` で、`nvidia-smi` の PCI バス順とは違う
+(実機: nvidia-smi GPU0=RTX 3090 だが CUDA0=RTX 5090)。ベンダ別一覧の添字で当てる
+方式が原理的に誤りだった。ID の名前空間はビルドごとにも別なので、**起動に使った
+実行ファイル自身に聞く以外に正解を得る方法はない**。
+
+- `llmbench/env.py`:
+  - `list_devices(binary)` を追加。`<llama-server> --list-devices` を解析して
+    ID → 名前 / VRAM の対応を得る。**CUDA / ROCm / Vulkan すべて同じ出力形式**なので
+    バックエンドごとの分岐なしで解決できる (デバイス名中の括弧
+    "AMD Radeon Graphics (RADV GFX1151)" を巻き込まないよう、メモリ括弧は行末に固定)
+  - `resolve_device()` を `--list-devices` 優先に変更。取れなかった場合のみ
+    従来の添字推定にフォールバックし、**必ず `device_name_uncertain` を立てる**
+  - `--device CUDA0,CUDA1` のような複数指定に対応
+  - `--device` 未指定でも `available_devices` として一覧を記録
+  - `--device CUDA0` でも未選択GPUに数百MiBのコンテキストが載るため、ごく小さい
+    取り分を `context_only` として区別。**分割ロードと誤報しない**よう修正
+- `llmbench/report.py`: 「使用デバイス」に解決元 (`--list-devices で確認` /
+  `⚠️ 列挙順からの推定`) を併記。コンテキストのみのGPUもその旨を表示
+- `llmbench/runner.py`: `summary` に `tokens_per_sec` (平均) と `avg_latency_ms` を追加。
+  従来は速度がタスク単位 (`results[]`) にしか無く、summary だけを読む外部ツール
+  (CodeRouter のスイープ結果パネル等) から見えなかった
+- テスト9件追加 (計180件): CUDA番号の取り違え回帰・複数デバイス指定・
+  ROCm/Vulkan も同一経路で解決・括弧入りデバイス名のパース・
+  フォールバック時の uncertain・コンテキストのみの取り分・summary の速度指標
+
+---
+
 # 🎯 起動引数から推論構成を読む (--device / -ngl) と誤GPU紐づけの修正 (2026-07-31)
 
 RTX 3090 + RTX 5090 + Radeon 8060S(APU内蔵) の実機で ROCm/Vulkan ビルドを検証したところ、

@@ -578,9 +578,26 @@ CUDA / ROCm / Vulkan のどれでも同じ方法で取れるので、ここを�
 > `--device ROCm0` を指定していても 0 層なら計算はCPUで走るため、tok/s はCPU性能の
 > 値になります。レポートはこの場合に明示的な警告を出します。
 
-`ROCm0` / `Vulkan2` / `CUDA0` といったデバイス名は実GPU名にも解決します。
-CUDA・ROCm は該当ベンダのGPU一覧の N 番目、Vulkan は `vulkaninfo --summary` の
-列挙順で引きます（`vulkaninfo` が無ければ搭載順で推定し、その旨を併記します）。
+`ROCm0` / `Vulkan2` / `CUDA0` といったデバイス名は実GPU名にも解決します。解決には
+**起動に使った実行ファイル自身の `--list-devices`** を使います。CUDA / ROCm / Vulkan
+すべて同じ形式で出力されるので、バックエンドごとの分岐は要りません。
+
+> [!WARNING]
+> **CUDA のデバイス番号は `nvidia-smi` の並びと一致しません。** CUDA の既定は
+> `FASTEST_FIRST`、`nvidia-smi` は PCI バス順です。実機では `nvidia-smi` の
+> GPU0 が RTX 3090 なのに `CUDA0` は RTX 5090 でした。ID の名前空間はビルドごとにも
+> 別（`CUDA0` と `Vulkan0` は同じGPUではない）なので、実行ファイルに聞く以外に
+> 正解を得る方法はありません。
+>
+> `--list-devices` を実行できなかった場合だけ搭載順から推定し、レポートに
+> `⚠️ 列挙順からの推定` と明示します。この値は信用しないでください。
+
+`--device` を指定していなくても、`--list-devices` の結果は `available_devices` として
+記録されます（そのビルドから何が見えているかの記録）。
+
+また、`--device CUDA0` のように1台だけ指定していても、未選択のGPUに数百MB程度の
+コンテキストが載ることがあります。これを分割ロードと誤報しないよう、ごく小さい
+取り分は `context_only` として区別します（実機: 5090 に 7.5GB / 3090 に 0.2GB）。
 
 #### 計算バックエンド (CUDA / ROCm / Vulkan) の記録
 
