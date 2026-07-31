@@ -551,8 +551,20 @@ Issue言語: `en` / タスク数: 20 / 試行: ×5
 |---|---|---|
 | Ollama (`type: ollama`) | ホスト実測 | `/api/ps`（量子化・パラメータ数・**size_vram/size = GPUオフロード率**）・`/api/version` |
 | llama.cpp 等 (`type: openai`, localhost) | ホスト実測 | `/props`（n_ctx・並列スロット・ggufパス→量子化）・`/v1/models` |
+| NVIDIA機（上記2つに共通） | `nvidia-smi`（GPU名・VRAM・driver・compute capability・CUDA） | `--query-compute-apps` で**推論プロセスがどのGPUに何GB載ったか** |
 | クラウドAPI (`type: openai`, リモート) | 記録するが**速度には無関係** | エンドポイントとモデル名のみ |
 | サブスクCLI (`type: cli`) | 同上 | preset 名とモデル名のみ |
+
+複数GPU機では、**推論プロセスが実際にどのGPUに載ったか**も記録されます。
+`llama.cpp` は `/props` にGPUオフロード情報を持たないため、ここが実質的な
+オフロード量の代理指標になります。
+
+```markdown
+| 使用GPU | GPU0 RTX 3090 6.0GB + GPU1 RTX 5090 6.6GB — 計 12.6GB を 2枚に分割ロード (llama-server) |
+
+> ⚠️ モデルが**複数GPUに分割ロード**されています。スループットは遅い側のカードと
+> GPU間転送に律速されるため、単体GPUでの測定値と同一視できません。
+```
 
 > [!IMPORTANT]
 > **GPUオフロード率が 100% 未満**なら一部がCPU実行されており、tok/s が大きく落ちます
@@ -641,7 +653,20 @@ artifactsに分離されているため軽い）。モデル間比較やCIに向
       "kind": "ollama", "quantization": "Q4_K_M", "parameter_size": "32.8B",
       "weights_gb": 19.6, "vram_resident_gb": 19.6,
       "gpu_offload_ratio": 1.0,               // 1.0 未満 = 一部CPU実行 → tok/s低下
-      "n_ctx": 32768, "server_version": "ollama 0.6.2"
+      "n_ctx": 32768, "server_version": "ollama 0.6.2",
+      "gpu_usage": {                          // NVIDIA機のみ (nvidia-smi 由来)
+        "inference": {
+          "pid": 3596389, "process": "llama-server",
+          "vram_total_gb": 12.6,
+          "multi_gpu": true,                  // 同一PIDが複数GPU = 分割ロード
+          "gpus": [
+            { "index": 0, "name": "NVIDIA GeForce RTX 3090", "vram_gb": 6.0 },
+            { "index": 1, "name": "NVIDIA GeForce RTX 5090", "vram_gb": 6.6 }
+          ]
+        },
+        "gpus": [ /* 搭載GPU全体の memory.used / memory.total */ ],
+        "processes": [ /* GPU×プロセスの内訳 */ ]
+      }
     }
   },
   "summary": {

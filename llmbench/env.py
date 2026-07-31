@@ -166,6 +166,101 @@ def _gpu_nvidia() -> list[dict]:
     return gpus
 
 
+# 推論サーバとみなすプロセス名 (どのGPUで推論が走ったかの判定に使う)
+_INFERENCE_PROCS = (
+    "llama-server", "llama_server", "llama-cli", "ollama", "vllm", "sglang",
+    "text-generation", "tabbyapi", "exllama", "koboldcpp", "python",
+)
+
+
+def _nvidia_gpu_memory() -> dict[str, dict]:
+    """GPU UUID -> {index, name, vram_used_gb, vram_total_gb} (nvidia-smi)."""
+    out = _sh([
+        "nvidia-smi",
+        "--query-gpu=uuid,index,name,memory.used,memory.total",
+        "--format=csv,noheader,nounits",
+    ])
+    gpus: dict[str, dict] = {}
+    for line in (out or "").splitlines():
+        p = [x.strip() for x in line.split(",")]
+        if len(p) < 5 or not p[0]:
+            continue
+        gpus[p[0]] = {
+            "index": _int(p[1]),
+            "name": p[2],
+            "vram_used_gb": round(_int(p[3]) / 1024, 1) if _int(p[3]) else 0.0,
+            "vram_total_gb": round(_int(p[4]) / 1024, 1) if _int(p[4]) else None,
+        }
+    return gpus
+
+
+def collect_gpu_usage() -> dict:
+    """どのGPUで推論が走ったかを nvidia-smi のスナップショットから判定する.
+
+    マルチGPU機では「3090で測ったのか5090で測ったのか」が分からないと tok/s に
+    意味がない。また llama.cpp は ``/props`` にGPUオフロード情報を持たないため、
+    プロセスのVRAM占有量が実質的なオフロード量の代理指標になる。
+
+    実行後 (モデルがロードされたまま) に1回だけ呼ぶ想定。取得できなければ {}。
+    """
+    gpus = _nvidia_gpu_memory()
+    if not gpus:
+        return {}
+    out = _sh([
+        "nvidia-smi",
+        "--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
+        "--format=csv,noheader,nounits",
+    ])
+    procs = []
+    for line in (out or "").splitlines():
+        p = [x.strip() for x in line.split(",")]
+        if len(p) < 4 or p[0] not in gpus:
+            continue
+        used = _int(p[3])
+        g = gpus[p[0]]
+        procs.append({
+            "gpu_index": g["index"],
+            "gpu_name": g["name"],
+            "pid": _int(p[1]),
+            "process": str(p[2]).split("/")[-1],
+            "vram_gb": round(used / 1024, 1) if used else 0.0,
+        })
+    usage: dict = {}
+    if procs:
+        usage["processes"] = procs
+        # 同一PIDが複数GPUに現れる = tensor split で分割ロードされている。
+        # 「どちらのGPUか」ではなく「どう分割されたか」を記録する必要がある。
+        infer = [p for p in procs
+                 if any(k in p["process"].lower() for k in _INFERENCE_PROCS)]
+        by_pid: dict[int | None, list[dict]] = {}
+        for p in (infer or procs):
+            by_pid.setdefault(p["pid"], []).append(p)
+        # VRAM合計が最大のPIDを推論プロセスとみなす
+        pid, shards = max(
+            by_pid.items(), key=lambda kv: sum(s["vram_gb"] for s in kv[1])
+        )
+        shards = sorted(shards, key=lambda s: s["gpu_index"] or 0)
+        inference = {
+            "pid": pid,
+            "process": shards[0]["process"],
+            "vram_total_gb": round(sum(s["vram_gb"] for s in shards), 1),
+            "multi_gpu": len(shards) > 1,
+            "gpus": [{"index": s["gpu_index"], "name": s["gpu_name"],
+                      "vram_gb": s["vram_gb"]} for s in shards],
+        }
+        if not infer:
+            # プロセス名が既知の推論サーバに一致しない = 別用途の可能性がある
+            inference["uncertain"] = True
+        usage["inference"] = inference
+    # 全GPUの使用量 (推論プロセスを特定できなくても手がかりになる)
+    usage["gpus"] = [
+        {"index": g["index"], "name": g["name"],
+         "vram_used_gb": g["vram_used_gb"], "vram_total_gb": g["vram_total_gb"]}
+        for g in sorted(gpus.values(), key=lambda g: g["index"] or 0)
+    ]
+    return usage
+
+
 def _cuda_version() -> str | None:
     out = _sh(["nvidia-smi", "--query", "--display=COMPUTE"]) or ""
     m = re.search(r"CUDA Version\s*:\s*([\d.]+)", out)
@@ -391,11 +486,19 @@ def collect(cfg: dict | None = None, served_model: str | None = None) -> dict:
     cfg = cfg or {}
     try:
         execution, note = _execution_kind(cfg)
+        backend = collect_backend(cfg, served_model)
+        if execution == "local":
+            # どのGPUに何GB載ったか (マルチGPUの分割ロードもここで分かる)。
+            # llama.cpp は /props にGPUオフロード情報を持たないため、
+            # このVRAM占有量が実質的なオフロード量の代理指標になる。
+            usage = collect_gpu_usage()
+            if usage:
+                backend["gpu_usage"] = usage
         return {
             "execution": execution,
             "note": note,
             "host": collect_host(),
-            "backend": collect_backend(cfg, served_model),
+            "backend": backend,
         }
     except Exception as e:
         return {"execution": "unknown",
@@ -416,9 +519,17 @@ def format_summary(env: dict) -> str:
                 parts.append(str(backend[key]))
         parts.append("推論はリモート実行")
         return " / ".join(parts)
-    gpus = host.get("gpu") or []
-    if gpus:
-        g = gpus[0]
+    # 実際に推論が載ったGPUが判っているならそれを優先 (マルチGPU機では
+    # 搭載GPUの1枚目を出すと誤解を生む)
+    inf = (backend.get("gpu_usage") or {}).get("inference") or {}
+    if inf.get("gpus"):
+        parts.append(" + ".join(
+            f"{g.get('name', 'GPU')} {g.get('vram_gb', 0)}GB"
+            for g in inf["gpus"]
+        ) + (f" (計{inf.get('vram_total_gb')}GB を分割)"
+             if inf.get("multi_gpu") else ""))
+    elif host.get("gpu"):
+        g = (host.get("gpu") or [])[0]
         name = g.get("name") or "GPU"
         if g.get("cores"):
             name += f" {g['cores']}core"

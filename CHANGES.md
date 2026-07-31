@@ -1,3 +1,31 @@
+# 🎮 マルチGPU機で「どのGPUに何GB載ったか」を記録 (2026-07-31)
+
+RTX 3090 + RTX 5090 の混載機 (Ubuntu) で実測したところ、レポートに搭載GPUが2枚並ぶだけで
+**tok/s がどちらのカードの値なのか読めない**ことが判明した。さらに `nvidia-smi` を確認すると
+同一PID (`llama-server`) が両GPUに現れており、実際には tensor split で分割ロードされていた。
+「どちらのGPUか」ではなく「**どう分割されたか**」を記録する必要があるため、設計を変更した。
+
+- `llmbench/env.py` に `collect_gpu_usage()` を追加 (execution=local のときのみ実行)
+  - `nvidia-smi --query-gpu=uuid,index,name,memory.used,memory.total` で GPU UUID→index を解決
+  - `--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory` で
+    プロセス×GPU の VRAM 占有量を取得し、**PIDでグルーピング**して分割状況を判定
+  - 既知の推論サーバ名 (llama-server / ollama / vllm / sglang 等) に一致しない場合は
+    `uncertain: true` を付け、断定しない
+  - **llama.cpp は `/props` にGPUオフロード情報を持たない**ため、この VRAM 占有量が
+    Ollama の `size_vram/size` に相当する代理指標になる
+- `llmbench/report.py`: 「使用GPU」行を追加 (`GPU0 RTX 3090 6.0GB + GPU1 RTX 5090 6.6GB —
+  計 12.6GB を 2枚に分割ロード`)。分割ロード時は「スループットは遅い側のカードとGPU間転送に
+  律速されるため単体GPUの測定値と同一視できない」と警告。GPU行に compute capability も表示
+- `llmbench/env.py` の `format_summary()`: マルチGPU機で搭載1枚目だけを表示すると誤解を招くため、
+  実際に推論が載ったGPUの構成を優先して出すよう変更
+- テスト8件追加 (計141件): 分割ロード検出・単体GPU・推論プロセス不明時の uncertain・
+  NVIDIA非搭載・リモートAPIでは収集しない・レポートの分割表示と警告
+
+実測 (Ornith-1.0-9B-Q6_K, 40問, 114.3 tok/s平均) では 3090 に 6.0GB / 5090 に 6.6GB の
+分割ロードだった。この構成では速い側の 5090 単体の値ではない点が結果ファイルから読めるようになった。
+
+---
+
 # 🖥 ベンチマーク結果に実行環境(GPU/スペック/推論構成)を記録 (2026-07-31)
 
 `tokens_per_sec` を残していても「どのマシンで、どの量子化で、GPUに何割載った状態で測ったか」が

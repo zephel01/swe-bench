@@ -76,6 +76,8 @@ def _env_section(env: dict) -> list[str]:
             spec.append(f"VRAM {g['vram_gb']}GB")
         elif g.get("vram"):
             spec.append(f"VRAM {g['vram']}")
+        if g.get("compute_capability"):
+            spec.append(f"CC {g['compute_capability']}")
         if g.get("driver"):
             spec.append(f"driver {g['driver']}")
         if g.get("metal"):
@@ -113,6 +115,22 @@ def _env_section(env: dict) -> list[str]:
             + (f" (VRAM常駐 {vr} GB)" if vr is not None else "")
             + note,
         ))
+    # 実際に推論プロセスが載っていたGPU (マルチGPUの分割ロードもここで判る)
+    inf = (backend.get("gpu_usage") or {}).get("inference") or {}
+    if inf.get("gpus"):
+        shards = " + ".join(
+            f"GPU{g.get('index')} {g.get('name', '?')} {g.get('vram_gb', 0)}GB"
+            for g in inf["gpus"]
+        )
+        val = shards
+        if inf.get("multi_gpu"):
+            val += (f" — 計 {inf.get('vram_total_gb', 0)}GB を "
+                    f"{len(inf['gpus'])}枚に分割ロード")
+        if inf.get("process"):
+            val += f" ({inf['process']})"
+        if inf.get("uncertain"):
+            val += " ※推論プロセスを特定できず、最大VRAM使用プロセスを表示"
+        rows.append(("使用GPU", val))
     if backend.get("n_ctx"):
         rows.append(("コンテキスト長", f"{backend['n_ctx']:,} tok"))
     if backend.get("parallel_slots"):
@@ -131,6 +149,10 @@ def _env_section(env: dict) -> list[str]:
     if rows:
         lines += ["", "| 項目 | 値 |", "|---|---|"]
         lines += [f"| {k} | {v} |" for k, v in rows]
+    if inf.get("multi_gpu"):
+        lines += ["", "> ⚠️ モデルが**複数GPUに分割ロード**されています。"
+                      "スループットは遅い側のカードとGPU間転送に律速されるため、"
+                      "単体GPUでの測定値と同一視できません。"]
     if execution != "local":
         lines += ["", "> ⚠️ 上記ホストは**計測クライアント**のスペック。"
                        "推論はリモートで実行されているため、"

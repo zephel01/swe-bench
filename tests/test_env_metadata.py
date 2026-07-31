@@ -174,6 +174,92 @@ def test_backend_remote_does_not_probe_local_endpoints():
     assert "n_ctx" not in b
 
 
+# ─────────────────── マルチGPU: どのGPUに載ったか ───────────────────
+
+# 実機 (RTX 3090 + RTX 5090, llama-server が両方に分割ロード) の nvidia-smi 出力
+_GPU_QUERY = (
+    "GPU-aaaa, 0, NVIDIA GeForce RTX 3090, 6129, 24576\n"
+    "GPU-bbbb, 1, NVIDIA GeForce RTX 5090, 6760, 32607"
+)
+_APPS_SPLIT = (
+    "GPU-aaaa, 3596389, /home/u/llama.cpp/build-cuda/bin/llama-server, 6106\n"
+    "GPU-bbbb, 3596389, /home/u/llama.cpp/build-cuda/bin/llama-server, 6750"
+)
+_APPS_SINGLE = (
+    "GPU-bbbb, 3596389, /home/u/llama.cpp/build-cuda/bin/llama-server, 6750"
+)
+
+
+def _fake_smi(monkeypatch, gpu_out, apps_out):
+    def _sh(cmd, timeout=None):
+        if cmd[0] != "nvidia-smi":
+            return None
+        joined = " ".join(cmd)
+        if "--query-compute-apps" in joined:
+            return apps_out
+        if "--query-gpu" in joined:
+            return gpu_out
+        return None
+
+    monkeypatch.setattr(envinfo, "_sh", _sh)
+
+
+def test_gpu_usage_detects_tensor_split_across_gpus(monkeypatch):
+    """同一PIDが複数GPUに出る = 分割ロード。「どちらか」ではなく分割として記録する."""
+    _fake_smi(monkeypatch, _GPU_QUERY, _APPS_SPLIT)
+    usage = envinfo.collect_gpu_usage()
+    inf = usage["inference"]
+    assert inf["multi_gpu"] is True
+    assert inf["pid"] == 3596389
+    assert inf["process"] == "llama-server"   # フルパスから実行ファイル名を抽出
+    assert [g["index"] for g in inf["gpus"]] == [0, 1]
+    assert [g["name"] for g in inf["gpus"]] == [
+        "NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 5090"]
+    assert inf["vram_total_gb"] == 12.6        # 6.0 + 6.6
+    assert "uncertain" not in inf
+    # 搭載GPU全体の使用量も残す
+    assert [g["vram_total_gb"] for g in usage["gpus"]] == [24.0, 31.8]
+
+
+def test_gpu_usage_single_gpu_is_not_flagged_multi(monkeypatch):
+    _fake_smi(monkeypatch, _GPU_QUERY, _APPS_SINGLE)
+    inf = envinfo.collect_gpu_usage()["inference"]
+    assert inf["multi_gpu"] is False
+    assert [g["index"] for g in inf["gpus"]] == [1]
+
+
+def test_gpu_usage_unknown_process_is_marked_uncertain(monkeypatch):
+    _fake_smi(monkeypatch, _GPU_QUERY, "GPU-bbbb, 42, /usr/bin/blender, 6750")
+    inf = envinfo.collect_gpu_usage()["inference"]
+    assert inf["uncertain"] is True
+
+
+def test_gpu_usage_without_nvidia_returns_empty(monkeypatch):
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: None)
+    assert envinfo.collect_gpu_usage() == {}
+
+
+def test_gpu_usage_only_collected_for_local_execution(monkeypatch):
+    """リモートAPIではローカルGPUを覗いても意味がないので収集しない."""
+    _fake_smi(monkeypatch, _GPU_QUERY, _APPS_SPLIT)
+    remote = envinfo.collect({"type": "openai",
+                              "base_url": "https://api.example.invalid/v1"})
+    assert "gpu_usage" not in remote["backend"]
+
+
+def test_summary_prefers_actual_inference_gpus(monkeypatch):
+    """マルチGPU機で搭載1枚目だけを出すと誤解を生むため、実使用GPUを出す."""
+    env = {"execution": "local", "host": {"gpu": [
+        {"name": "NVIDIA GeForce RTX 3090", "vram_gb": 24.0}]},
+        "backend": {"gpu_usage": {"inference": {
+            "multi_gpu": True, "vram_total_gb": 12.6, "gpus": [
+                {"index": 0, "name": "RTX 3090", "vram_gb": 6.0},
+                {"index": 1, "name": "RTX 5090", "vram_gb": 6.6}]}}}}
+    s = envinfo.format_summary(env)
+    assert "RTX 3090 6.0GB + RTX 5090 6.6GB" in s
+    assert "計12.6GB を分割" in s
+
+
 # ────────────────────────── レポート出力 ──────────────────────────
 
 
@@ -193,6 +279,38 @@ def test_report_section_remote_warns_specs_are_client_side():
     md = "\n".join(_env_section(env))
     assert "計測クライアント" in md
     assert "同列に比較しないこと" in md
+
+
+def test_report_shows_multi_gpu_split_and_warns():
+    env = {"execution": "local", "host": {"gpu": [
+        {"name": "NVIDIA GeForce RTX 3090", "vram_gb": 24.0,
+         "compute_capability": "8.6", "driver": "610.43.02"},
+        {"name": "NVIDIA GeForce RTX 5090", "vram_gb": 31.8,
+         "compute_capability": "12.0", "driver": "610.43.02"}]},
+        "backend": {"kind": "llama.cpp", "gpu_usage": {"inference": {
+            "process": "llama-server", "multi_gpu": True,
+            "vram_total_gb": 12.6, "gpus": [
+                {"index": 0, "name": "NVIDIA GeForce RTX 3090", "vram_gb": 6.0},
+                {"index": 1, "name": "NVIDIA GeForce RTX 5090",
+                 "vram_gb": 6.6}]}}}}
+    md = "\n".join(_env_section(env))
+    assert "GPU0 NVIDIA GeForce RTX 3090 6.0GB" in md
+    assert "GPU1 NVIDIA GeForce RTX 5090 6.6GB" in md
+    assert "計 12.6GB を 2枚に分割ロード" in md
+    assert "遅い側のカード" in md          # 単体GPUと同一視しない警告
+    assert "CC 8.6" in md and "CC 12.0" in md
+
+
+def test_report_single_gpu_has_no_split_warning():
+    env = {"execution": "local", "host": {}, "backend": {
+        "kind": "llama.cpp", "gpu_usage": {"inference": {
+            "process": "llama-server", "multi_gpu": False,
+            "vram_total_gb": 6.6,
+            "gpus": [{"index": 1, "name": "RTX 5090", "vram_gb": 6.6}]}}}}
+    md = "\n".join(_env_section(env))
+    assert "GPU1 RTX 5090 6.6GB" in md
+    assert "分割ロード" not in md
+    assert "遅い側のカード" not in md
 
 
 def test_report_section_empty_env_is_omitted():
