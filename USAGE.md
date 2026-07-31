@@ -496,7 +496,7 @@ results/
 
 ## 11. レポート (`report.md`) の読み方
 
-レポートは **サマリ → usability判定 → タスク別結果 → 難易度別 → タスク別詳細** の構成です。
+レポートは **サマリ → 実行環境 → usability判定 → タスク別結果 → 難易度別 → タスク別詳細** の構成です。
 
 ### サマリ
 
@@ -519,6 +519,49 @@ Issue言語: `en` / タスク数: 20 / 試行: ×5
 - 🟢 自律 17/20 / 🟡 補助 2/20 / 🔴 不可 1/20
 > 総合推奨: おおむね自律。ただし🔴不可 1/20 (5%) は要注意
 ```
+
+### 🖥 実行環境（サマリ直下）
+
+**どのハードで、どの構成で測ったか**が自動で記録されます。`tok/s` は同じGPUでも
+量子化・GPUオフロード率・コンテキスト長で数倍変わるため、スペックだけでなく
+**推論バックエンドの構成**まで併記します。取得は best-effort で、失敗しても
+ベンチマーク本体は止まりません（該当行が出ないだけ）。
+
+```markdown
+## 🖥 実行環境
+
+**🖥 ローカル推論**
+
+> ローカル推論 (このホストのGPU/メモリが生成速度を決める)
+
+| 項目 | 値 |
+|---|---|
+| CPU | Apple M3 Max (16スレッド / P12+E4) |
+| GPU | Apple M3 Max — 40コア / metal3 |
+| メモリ | 128.0 GB (unified memory) |
+| 推論バックエンド | ollama |
+| 量子化 | Q4_K_M |
+| GPUオフロード率 | ✅ 100% (VRAM常駐 19.6 GB) |
+| コンテキスト長 | 32,768 tok |
+```
+
+取得元は実行形態ごとに異なります。
+
+| 実行形態 | ハード情報 | バックエンド構成の取得元 |
+|---|---|---|
+| Ollama (`type: ollama`) | ホスト実測 | `/api/ps`（量子化・パラメータ数・**size_vram/size = GPUオフロード率**）・`/api/version` |
+| llama.cpp 等 (`type: openai`, localhost) | ホスト実測 | `/props`（n_ctx・並列スロット・ggufパス→量子化）・`/v1/models` |
+| クラウドAPI (`type: openai`, リモート) | 記録するが**速度には無関係** | エンドポイントとモデル名のみ |
+| サブスクCLI (`type: cli`) | 同上 | preset 名とモデル名のみ |
+
+> [!IMPORTANT]
+> **GPUオフロード率が 100% 未満**なら一部がCPU実行されており、tok/s が大きく落ちます
+> （モデルを小さい量子化に変える／`n_ctx` を下げる／レイヤ数を調整する、で改善）。
+> ⚠️ マークが出ていたら、まずここを疑ってください。
+>
+> クラウドAPI・サブスクCLIでは**推論はベンダ側のハード**で走るため、表に出る
+> CPU/GPU は「計測クライアント」の情報です。ローカル実行の tok/s と同列に比較しないでください。
+> `compare` は複数結果の測定環境が揃っているかを判定し、揃っていなければ警告を出します。
 
 ### タスク別結果（一覧表）
 
@@ -585,6 +628,22 @@ artifactsに分離されているため軽い）。モデル間比較やCIに向
   "model": "Qwopus3.6-27B-Coder-MTP-Q6_K",   // model:auto検出時は実モデル名
   "issue_lang": "en",
   "artifacts_dir": "<stamp>_<model>_artifacts",
+  "environment": {                            // 実行環境 (取得できた項目のみ)
+    "execution": "local",                     // local | remote-api | subscription-cli | mock
+    "note": "ローカル推論 (このホストのGPU/メモリが生成速度を決める)",
+    "host": {
+      "os": "macOS 15.5", "arch": "arm64", "python": "3.14.0",
+      "cpu": "Apple M3 Max", "cpu_cores": 16, "ram_gb": 128.0,
+      "unified_memory": true,
+      "gpu": [ { "name": "Apple M3 Max", "cores": 40, "metal": "metal3" } ]
+    },
+    "backend": {
+      "kind": "ollama", "quantization": "Q4_K_M", "parameter_size": "32.8B",
+      "weights_gb": 19.6, "vram_resident_gb": 19.6,
+      "gpu_offload_ratio": 1.0,               // 1.0 未満 = 一部CPU実行 → tok/s低下
+      "n_ctx": 32768, "server_version": "ollama 0.6.2"
+    }
+  },
   "summary": {
     "resolved_rate": 0.95,
     "avg_quality_resolved": 89.8,

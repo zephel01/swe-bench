@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from . import env as envinfo
 from . import usability
 from .clients import LLMClient, create_client
 from .clients.mock import MockClient
@@ -97,6 +98,9 @@ class RunResult:
     runs: int = 1
     artifacts_dirname: str = ""   # save_run時に生成物ディレクトリ名が入る
     served_model: str = ""        # 実際に応答したモデル名 (model:auto / type:cli の検出結果)
+    # 実行環境 (ホストのCPU/GPU/RAM + 推論バックエンド構成)。env.collect() の戻り値。
+    # tok/s は量子化・GPUオフロード率・n_ctx で数倍変わるので結果と同じJSONに残す。
+    environment: dict = field(default_factory=dict)
 
     @property
     def multi_run(self) -> bool:
@@ -285,12 +289,10 @@ class BenchmarkRunner:
         client_type: str | None = None,
         base_url: str | None = None,
     ) -> RunResult:
-        client = create_client(
-            model_name,
-            self.resolve_model(
-                model_name, client_type=client_type, base_url=base_url
-            ),
+        model_cfg = self.resolve_model(
+            model_name, client_type=client_type, base_url=base_url
         )
+        client = create_client(model_name, model_cfg)
         reviewer = self._make_reviewer()
         judge, judge_seeds = self._make_judge()
         lang = self.run_cfg.get("issue_lang", "en")
@@ -342,6 +344,17 @@ class BenchmarkRunner:
         run.served_model = served or detected or ""
         if detected:
             progress(f"実行モデル : {detected} (CLI応答から検出 → resultsに記録)")
+
+        # 実行環境を記録 (ハード + バックエンド構成)。
+        # 生成を1回以上通した後に取るのは、Ollama の /api/ps が
+        # 「ロード済みモデル」しか返さない = 実行前だと空になるため。
+        # 収集は best-effort で、失敗してもベンチ結果には影響させない。
+        run.environment = envinfo.collect(
+            model_cfg, served_model=run.served_model or None
+        )
+        summary = envinfo.format_summary(run.environment)
+        if summary:
+            progress(f"実行環境   : {summary}")
         return run
 
     def _one_attempt(
@@ -654,6 +667,8 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
     }
     if run.served_model:
         payload["served_model"] = run.served_model
+    if run.environment:
+        payload["environment"] = run.environment
     json_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )

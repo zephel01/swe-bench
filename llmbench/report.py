@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import usability
+from .env import EXEC_LABEL
 
 
 def _fmt_ruff(c: dict) -> str:
@@ -39,6 +40,103 @@ def _fmt_component(name: str, c: dict) -> str:
     # 汎用フォールバック
     detail = ", ".join(f"{k}={v}" for k, v in c.items() if k != "enabled")
     return detail
+
+
+def _env_section(env: dict) -> list[str]:
+    """実行環境セクション (ハードウェア + 推論バックエンド構成).
+
+    tok/s は「同じGPUでも量子化・GPUオフロード率・n_ctx で数倍変わる」ため、
+    スペックだけでなくバックエンド構成も併記する。クラウドAPIの場合は
+    ホストのスペックが速度に無関係である旨を明示して誤読を防ぐ。
+    """
+    if not env:
+        return []
+    execution = env.get("execution", "unknown")
+    host = env.get("host") or {}
+    backend = env.get("backend") or {}
+    lines = ["## 🖥 実行環境", "",
+             f"**{EXEC_LABEL.get(execution, execution)}**"]
+    if env.get("note"):
+        lines += ["", f"> {env['note']}"]
+    rows: list[tuple[str, str]] = []
+
+    # ── ホスト ──
+    if host.get("cpu"):
+        cores = host.get("cpu_cores")
+        detail = f" ({cores}コア)" if cores else ""
+        if host.get("cpu_cores_perf") and host.get("cpu_cores_eff"):
+            detail = (f" ({cores}スレッド / P{host['cpu_cores_perf']}"
+                      f"+E{host['cpu_cores_eff']})")
+        rows.append(("CPU", f"{host['cpu']}{detail}"))
+    for g in host.get("gpu") or []:
+        spec = []
+        if g.get("cores"):
+            spec.append(f"{g['cores']}コア")
+        if g.get("vram_gb"):
+            spec.append(f"VRAM {g['vram_gb']}GB")
+        elif g.get("vram"):
+            spec.append(f"VRAM {g['vram']}")
+        if g.get("driver"):
+            spec.append(f"driver {g['driver']}")
+        if g.get("metal"):
+            spec.append(g["metal"])
+        rows.append(("GPU", f"{g.get('name', '?')}"
+                     + (f" — {' / '.join(spec)}" if spec else "")))
+    if host.get("ram_gb"):
+        unified = " (unified memory)" if host.get("unified_memory") else ""
+        rows.append(("メモリ", f"{host['ram_gb']} GB{unified}"))
+    if host.get("cuda"):
+        rows.append(("CUDA", host["cuda"]))
+    if host.get("os"):
+        rows.append(("OS", f"{host['os']} / {host.get('arch', '?')} / "
+                           f"Python {host.get('python', '?')}"))
+
+    # ── 推論バックエンド (ローカル推論のときだけ速度に効く) ──
+    if backend.get("kind"):
+        rows.append(("推論バックエンド", str(backend["kind"])))
+    if backend.get("server_version"):
+        rows.append(("サーバ", str(backend["server_version"])))
+    if backend.get("quantization"):
+        rows.append(("量子化", str(backend["quantization"])))
+    if backend.get("parameter_size"):
+        rows.append(("パラメータ数", str(backend["parameter_size"])))
+    if backend.get("weights_gb"):
+        rows.append(("モデルサイズ", f"{backend['weights_gb']} GB"))
+    ratio = backend.get("gpu_offload_ratio")
+    if ratio is not None:
+        vr = backend.get("vram_resident_gb")
+        mark = "✅" if ratio >= 0.999 else "⚠️"
+        note = "" if ratio >= 0.999 else " ← 一部CPU実行のため tok/s が大きく落ちる"
+        rows.append((
+            "GPUオフロード率",
+            f"{mark} {ratio * 100:.0f}%"
+            + (f" (VRAM常駐 {vr} GB)" if vr is not None else "")
+            + note,
+        ))
+    if backend.get("n_ctx"):
+        rows.append(("コンテキスト長", f"{backend['n_ctx']:,} tok"))
+    if backend.get("parallel_slots"):
+        rows.append(("並列スロット", str(backend["parallel_slots"])))
+    if backend.get("model_path"):
+        rows.append(("モデルファイル", f"`{backend['model_path']}`"))
+    if backend.get("base_url"):
+        rows.append(("エンドポイント", f"`{backend['base_url']}`"))
+    if backend.get("note"):
+        rows.append(("備考", str(backend["note"])))
+    if env.get("collect_error") or backend.get("collect_error"):
+        rows.append(("⚠️ 収集エラー",
+                     str(env.get("collect_error")
+                         or backend.get("collect_error"))))
+
+    if rows:
+        lines += ["", "| 項目 | 値 |", "|---|---|"]
+        lines += [f"| {k} | {v} |" for k, v in rows]
+    if execution != "local":
+        lines += ["", "> ⚠️ 上記ホストは**計測クライアント**のスペック。"
+                       "推論はリモートで実行されているため、"
+                       "tok/s をローカル実行の結果と同列に比較しないこと。"]
+    lines.append("")
+    return lines
 
 
 def _status_icon(r) -> str:
@@ -142,6 +240,9 @@ def render_markdown(run) -> str:
             "≥1成功 = N回中1回でも通ったか（再試行込みの到達可能性）。",
             "",
         ]
+    # 実行環境 (どのハード・どの構成で測ったか)
+    lines += _env_section(getattr(run, "environment", None) or {})
+
     # usability判定 (サマリ直下)
     lines += _usability_section(run)
 

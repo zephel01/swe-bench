@@ -32,6 +32,7 @@
 - 🆚 **モデル横断比較** — `compare` で複数結果を1枚のランキング・マトリクスに。参照モデル(API)を併置して位置づけ
 - 🇯🇵 **日英issue同梱** — `--lang ja` で「language tax」(日本語指示による性能低下)を計測可能。医療QAなど日本語回答モデルも gold の日英許容語で正しく採点
 - ⚡ **速度計測** — タスク別レイテンシ / tok/s をレポートに自動記録。**生成時間はパース失敗時のリトライを含む合計、tok/s と生成トークン数は最終生成のみの値**(掛け算しても生成トークン数には戻らない点に注意)
+- 🖥 **実行環境の自動記録** — CPU/GPU/メモリ/OS に加え、**量子化・GPUオフロード率・コンテキスト長**まで results.json と report.md に自動で残す。tok/s は同じGPUでもこれらで数倍変わるため、スペック表記だけでは比較にならない。クラウドAPI/サブスクCLIは「推論はリモート」と明示し、ローカル実行の tok/s と混同しないようにする。`compare` は測定環境が揃っているかを判定して警告
 - 📦 **同梱タスク40個（+任意20＋任意16）** — L1 easy 5 / L2 medium 5 / L3 hard 10 / **L4 expert 12 / L5 frontier 8**。さらに **L6 architect 20問 (t041–t060) を任意オプション (`--with-l6`) で**、**L7 grandmaster 16問 (t063–t107 の16問) を `--with-l7` で追加** でき (併用可)、上位帯の天井効果を破る。**`--only-l6`/`--only-l7`** で既定40問を除いてL6/L7だけを単体実行し（分割運用向け）、後日 `certify --merge` で結果を統合することも可能。frontier/architect/grandmaster は複数ファイル・回帰罠・性能制約(perf_timeout)を含み、issueは**症状ベース**で原因診断を要求。外部依存なし(stdlib-only)で即実行
 - 🛡️ **安全設計** — テストはLLMに非公開、patch書込先は既知ファイルに限定、元タスクは不変
 
@@ -324,6 +325,7 @@ swe-bench/
 │   ├── sandbox.py      # 📦 一時コピー + pytest隔離実行
 │   ├── functional.py   # ✅ resolved判定 (code grader が使用)
 │   ├── quality/        # 🧹 ruff / complexity / llm_review / sonar
+│   ├── env.py          # 🖥 実行環境の収集 (CPU/GPU/RAM/OS + 量子化・GPUオフロード率・n_ctx)
 │   ├── scoring.py      # ⚖️ 複合スコア + pass@k 推定量
 │   ├── usability.py    # 🧭 自律/補助/不可 ティア分類
 │   ├── certify.py      # 🎓 tier認証 + ドメイン別ゲート + バランス指数 + 医療readout

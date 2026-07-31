@@ -1,3 +1,40 @@
+# 🖥 ベンチマーク結果に実行環境(GPU/スペック/推論構成)を記録 (2026-07-31)
+
+`tokens_per_sec` を残していても「どのマシンで、どの量子化で、GPUに何割載った状態で測ったか」が
+results.json に無く、後から結果を突き合わせられない状態だった。同じGPUでも量子化・GPUオフロード率・
+コンテキスト長で tok/s は数倍変わるため、**スペック表記だけでは不十分**で、推論バックエンドの構成まで
+同じJSONに埋める方式にした (llama.cpp の `llama-bench` が backend/ngl/threads を必ず列に持つ運用、
+MLPerf Inference が system_desc を成果物に同梱する運用と同じ考え方)。
+
+- `llmbench/env.py` を新規追加。収集は3系統:
+  - **ホスト**: macOS は `sysctl` + `system_profiler SPDisplaysDataType`(GPUコア数・Metal世代・
+    P/Eコア構成・unified memory)、Linux は `/proc/cpuinfo` `/proc/meminfo` + `nvidia-smi`
+    (GPU名・VRAM・driver・compute capability・CUDA版)
+  - **推論バックエンド**: Ollama は `/api/ps` から量子化・パラメータ数・`size_vram/size` =
+    **GPUオフロード率**・n_ctx を、llama.cpp は `/props` から n_ctx・並列スロット・ggufパス
+    (ファイル名から量子化を抽出) を取得
+  - **実行形態**: `local` / `remote-api` / `subscription-cli` / `mock` に分類。リモート推論では
+    ホストのスペックが速度に無関係である旨をレポートに明示 (ローカル実行の tok/s との誤比較を防ぐ)
+- 収集は全面 best-effort。**例外を外に出さない / 追加依存なし / api_key を含めない** の3点を不変条件とし、
+  取得失敗時は該当キーを省くだけでベンチマーク本体には影響させない
+- `llmbench/runner.py`: `RunResult.environment` を追加し、生成を1回以上通した**後**に収集
+  (Ollama の `/api/ps` はロード済みモデルしか返さないため実行前だと空になる)。
+  results.json に `"environment"` として出力し、実行ログにも1行サマリを表示
+- `llmbench/report.py`: サマリ直下に「## 🖥 実行環境」セクションを追加。
+  GPUオフロード率が100%未満なら ⚠️ を付けて「一部CPU実行のため tok/s が落ちる」と明示
+- `llmbench/compare.py`: 実行環境の一覧を追加し、測定環境が揃っているかを判定。
+  揃っていなければ「tok/s の直接比較は不可 (品質・Resolvedの比較は有効)」と警告、
+  環境未記録の旧 results も検出する
+- `tests/test_env_metadata.py` を新規追加(26件): 例外非送出・JSON化可能性・**api_key 非混入**・
+  実行形態の分類・モックHTTPサーバによる `/api/ps` `/props` パース・部分オフロードの警告表示・
+  results.json への埋め込み・**environment 未記録時の後方互換**・compare の環境不一致警告
+
+既存の results.json は `environment` を持たないが、レポート・compare とも欠損時は該当セクションを
+出さないだけで従来通り動作する (後方互換)。`pytest tests/` 全件パス (129件)、変更ファイルの
+`ruff check` クリーンを確認済み。
+
+---
+
 # 🔍 推論(thinking)モデル対策: reasoning_content フォールバック + 空出力の診断ログ (2026-07-27)
 
 推論系モデル(Fara1.5等)をllama.cpp/vLLM経由で測定した際、`empty output` 判定になるタスクが

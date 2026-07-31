@@ -10,6 +10,8 @@ import json
 import time
 from pathlib import Path
 
+from .env import EXEC_LABEL, format_summary
+
 
 def load_results(paths: list[str | Path]) -> list[dict]:
     """results.json 群を読み込む. ファイル名でなくmodel名で識別する."""
@@ -41,6 +43,50 @@ def _task_index(runs: list[dict]) -> dict[str, dict]:
     return idx
 
 
+def _env_signature(env: dict) -> str:
+    """同一環境で測ったかの判定キー (ホスト + バックエンド構成)."""
+    host = env.get("host") or {}
+    backend = env.get("backend") or {}
+    gpu = ",".join(str(g.get("name", "")) for g in (host.get("gpu") or []))
+    return "|".join(str(x) for x in (
+        env.get("execution", ""), host.get("cpu", ""), gpu,
+        host.get("ram_gb", ""), backend.get("kind", ""),
+        backend.get("quantization", ""), backend.get("n_ctx", ""),
+    ))
+
+
+def _env_compare_section(rows: list[dict]) -> list[str]:
+    """モデルごとの実行環境を並べ、tok/s の比較可否を明示する."""
+    envs = [r for r in rows if r.get("env")]
+    if not envs:
+        return ["", "> ⚠️ 実行環境が記録されていない results があります "
+                    "(旧バージョンで生成)。tok/s の比較には注意。"]
+    lines = ["", "## 🖥 実行環境", "",
+             "| モデル | 実行形態 | ハード / 推論構成 |", "|---|---|---|"]
+    for r in rows:
+        env = r.get("env") or {}
+        if not env:
+            lines.append(f"| {r['model']} | — | (記録なし) |")
+            continue
+        label = EXEC_LABEL.get(env.get("execution", ""), env.get("execution", "?"))
+        lines.append(
+            f"| {r['model']} | {label} | {format_summary(env) or '—'} |"
+        )
+    sigs = {_env_signature(r["env"]) for r in envs}
+    local = [r for r in envs if (r["env"].get("execution") == "local")]
+    if len(sigs) > 1:
+        lines += ["", "> ⚠️ **測定環境が揃っていません**。tok/s は環境依存なので"
+                      "速度の直接比較は不可 (品質・Resolvedの比較は有効)。"]
+    elif local and len(local) == len(envs):
+        lines += ["", "> ✅ 全モデルが同一環境で測定されています "
+                      "(tok/s の直接比較が可能)。"]
+    if len(envs) < len(rows):
+        lines += ["", "> ⚠️ 実行環境が記録されていない results があります "
+                      "(旧バージョンで生成)。"]
+    lines.append("")
+    return lines
+
+
 def render_comparison(runs: list[dict]) -> str:
     if not runs:
         return "# モデル比較\n\n(結果がありません)\n"
@@ -60,6 +106,7 @@ def render_comparison(runs: list[dict]) -> str:
             "combined": s.get("avg_combined", 0.0),
             "tps": _avg_tps(run.get("results", [])),
             "usability": s.get("usability", {}),
+            "env": run.get("environment") or {},
             "results": {r["task_id"]: r for r in run.get("results", [])},
         })
     rows.sort(key=lambda x: x["combined"], reverse=True)
@@ -98,6 +145,9 @@ def render_comparison(runs: list[dict]) -> str:
             f"| {r['quality']:.1f} | {r['combined']:.1f} "
             f"| {rel:.0f}% | {tps} |"
         )
+
+    # 実行環境の併記 (tok/s は測定環境が違うと比較できないため必須)
+    lines += _env_compare_section(rows)
 
     # usabilityティア比較
     lines += ["", "## usabilityティア比較", "",
