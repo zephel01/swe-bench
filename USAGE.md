@@ -555,6 +555,46 @@ Issue言語: `en` / タスク数: 20 / 試行: ×5
 | クラウドAPI (`type: openai`, リモート) | 記録するが**速度には無関係** | エンドポイントとモデル名のみ |
 | サブスクCLI (`type: cli`) | 同上 | preset 名とモデル名のみ |
 
+#### 計算バックエンド (CUDA / ROCm / Vulkan) の記録
+
+llama.cpp の `/props` は `build_info`（例 `b10157-c6292cfb8`）しか返さず、
+**どのバックエンドでビルドされたかは API から取れません**。tok/s を最も左右する
+要素なので、推論プロセスがロードしている共有ライブラリから逆算します。
+
+| 判定 | 根拠にするライブラリ |
+|---|---|
+| CUDA | `libggml-cuda` / `libcudart` / `libcublas` |
+| ROCm | `libggml-hip` / `libamdhip64` / `librocblas` / `libhipblas` |
+| SYCL | `libggml-sycl` / `libsycl` |
+| Vulkan | `libggml-vulkan` / `libvulkan` |
+| CPUのみ | 上記いずれも無し |
+
+`/proc/<pid>/maps` を読むだけなので root は不要です。判定順は CUDA/ROCm/SYCL が
+先で、CUDAビルドが `libvulkan` を間接ロードしていても Vulkan とは誤判定しません
+（併載は `also_loaded` に残ります）。`/proc/<pid>/exe` から実行バイナリの実体パスも
+記録するので、`build-cuda` / `build-rocm` / `build-vulkan` のようなディレクトリ名が
+そのまま裏付けになります（ライブラリを読めない場合はパスだけで判定します）。
+
+サーバのPIDは **`base_url` のポートに一致するプロセスを優先**して探します。
+同じポートでビルドを差し替える運用でも、いま上がっている方を掴みます。
+
+自動検出が効かない場合（別ユーザやコンテナ内でサーバを起動している等）は、
+`config.yaml` の models エントリに `runtime:` を書けばそちらが正になります。
+
+```yaml
+  local-openai:
+    type: openai
+    base_url: "http://localhost:8085/v1"
+    runtime: "llama.cpp/ROCm"   # 省略時は自動検出
+```
+
+書いた値と検出値が食い違うと、レポートに `⚠️ 検出値は **CUDA** で不一致` と出ます。
+ビルドを差し替えて `runtime:` を直し忘れたときに気付けるようにするためです。
+
+なお NVIDIA だけでなく **AMD GPU も列挙**します（`rocm-smi`、無ければ `lspci`）。
+ROCm や Vulkan で Radeon（APUの内蔵GPU含む）を使う場合、`nvidia-smi` しか見ていないと
+GPU欄が空になってしまうためです。
+
 複数GPU機では、**推論プロセスが実際にどのGPUに載ったか**も記録されます。
 `llama.cpp` は `/props` にGPUオフロード情報を持たないため、ここが実質的な
 オフロード量の代理指標になります。

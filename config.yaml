@@ -17,6 +17,13 @@ models:
     #   非推論モデル(qwen2.5-coder 等)なら 4096 のままで良い。
     max_tokens: 24576
     timeout: 600
+    # 計算バックエンド。省略時は推論プロセスのロード済みライブラリから自動検出する
+    # (CUDA / ROCm / Vulkan / SYCL / Metal / CPU)。llama.cpp の /props は
+    # build_info しか返さずバックエンドを教えてくれないため、tok/s の比較には
+    # この情報が要る。自動検出が効かない環境 (別ユーザ/コンテナ内で起動している等)
+    # や、明示的にラベルを固定したいときだけ書く。書いた値が正として扱われ、
+    # 検出値と食い違えばレポートに ⚠️ 不一致 と出る。
+    # runtime: "llama.cpp/ROCm"
 
   # Ollama
   local-ollama:

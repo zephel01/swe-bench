@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
 import shutil
@@ -33,7 +34,8 @@ import subprocess
 import sys
 
 __all__ = [
-    "EXEC_LABEL", "collect", "collect_host", "collect_backend", "format_summary",
+    "EXEC_LABEL", "collect", "collect_host", "collect_backend",
+    "collect_gpu_usage", "detect_runtime", "find_server_pid", "format_summary",
 ]
 
 # execution の人間向けラベル (report / compare 共通)
@@ -94,6 +96,15 @@ def _get_json(url: str, timeout: float = _HTTP_TIMEOUT):
         if resp.status_code >= 400:
             return None
         return resp.json()
+    except Exception:
+        return None
+
+
+def _port_of(base_url: str) -> int | None:
+    try:
+        from urllib.parse import urlparse
+
+        return urlparse(base_url).port
     except Exception:
         return None
 
@@ -261,6 +272,179 @@ def collect_gpu_usage() -> dict:
     return usage
 
 
+# ─────────── 計算バックエンド (CUDA / ROCm / Vulkan / Metal) の判別 ───────────
+#
+# llama.cpp の `/props` は build_info (例 "b10157-c6292cfb8") しか返さず、
+# **どのバックエンドでビルドされたかは API から一切取れない**。しかし tok/s は
+# CUDA / ROCm / Vulkan で大きく変わるため、ここを空欄にすると結果を比較できない。
+# そこで推論プロセスがロードしている共有ライブラリから逆算する。
+# 判定順は重要: CUDA/ROCm/SYCL ビルドが libvulkan を間接ロードしていても
+# Vulkan と誤判定しないよう、専用ランタイムを先に見る。
+_RUNTIME_LIBS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("CUDA", ("libggml-cuda", "libcudart", "libcublas")),
+    ("ROCm", ("libggml-hip", "libamdhip64", "librocblas", "libhipblas")),
+    ("SYCL", ("libggml-sycl", "libsycl", "libmkl_sycl")),
+    ("Vulkan", ("libggml-vulkan", "libvulkan")),
+    ("Metal", ("libggml-metal",)),
+    ("BLAS", ("libggml-blas", "libopenblas", "libmkl_rt")),
+)
+# 推論サーバのプロセス名 (実行ファイル名で照合する)
+_SERVER_NAMES = ("llama-server", "llama_server", "ollama", "vllm", "sglang",
+                 "koboldcpp", "tabbyapi")
+
+
+def _proc_cmdlines() -> list[tuple[int, str]]:
+    """(pid, cmdline) の一覧. Linux は /proc、macOS は ps から取る."""
+    out: list[tuple[int, str]] = []
+    if sys.platform.startswith("linux"):
+        try:
+            for name in os.listdir("/proc"):
+                if not name.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{name}/cmdline", "rb") as f:
+                        cmd = f.read().replace(b"\x00", b" ").decode(
+                            "utf-8", "replace"
+                        ).strip()
+                except Exception:
+                    continue
+                if cmd:
+                    out.append((int(name), cmd))
+        except Exception:
+            return []
+        return out
+    # macOS / その他
+    ps = _sh(["ps", "-Ao", "pid=,args="])
+    for line in (ps or "").splitlines():
+        line = line.strip()
+        pid, _, cmd = line.partition(" ")
+        if pid.isdigit() and cmd:
+            out.append((int(pid), cmd.strip()))
+    return out
+
+
+def find_server_pid(port: int | None = None) -> int | None:
+    """ローカルで動いている推論サーバの PID を探す.
+
+    同じポートでビルドを差し替える運用を想定し、**ポート一致を最優先**する
+    (CUDA版を落として ROCm版を上げた直後でも、今あがっている方を掴む)。
+    """
+    cands = [(pid, cmd) for pid, cmd in _proc_cmdlines()
+             if any(n in cmd for n in _SERVER_NAMES)]
+    if not cands:
+        return None
+    if port:
+        for pid, cmd in cands:
+            if f"--port {port}" in cmd or f"--port={port}" in cmd or \
+                    f":{port}" in cmd:
+                return pid
+    return cands[0][0]
+
+
+def _proc_exe(pid: int) -> str | None:
+    """/proc/<pid>/exe が指す実行ファイルの実体パス (取れなければ None)."""
+    try:
+        return os.readlink(f"/proc/{pid}/exe")
+    except Exception:
+        return None
+
+
+def _proc_maps(pid: int) -> str | None:
+    """/proc/<pid>/maps の内容 (自プロセス所有ならroot不要。無理なら None)."""
+    try:
+        with open(f"/proc/{pid}/maps", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def detect_runtime(pid: int | None) -> dict:
+    """推論プロセスのロード済みライブラリから計算バックエンドを判別する.
+
+    ``/proc/<pid>/maps`` は自プロセス所有なら root 不要で読める。
+    ggml をバックエンド別 .so に分けたビルド (libggml-cuda.so 等) でも、
+    静的リンクしたビルド (libcudart / libamdhip64 が直接見える) でも判る。
+    """
+    if not pid:
+        return {}
+    info: dict = {}
+    exe = _proc_exe(pid)
+    if exe:
+        info["binary"] = exe
+    libs: set[str] = set()
+    for line in (_proc_maps(pid) or "").splitlines():
+        path = line.rstrip("\n").split(" ", 5)[-1].strip()
+        if path.startswith("/") and ".so" in path:
+            libs.add(path.rsplit("/", 1)[-1])
+    if libs:
+        hits = []
+        for label, keys in _RUNTIME_LIBS:
+            matched = sorted({lib for lib in libs
+                              for k in keys if lib.startswith(k)})
+            if matched:
+                hits.append((label, matched))
+        if hits:
+            info["compute"] = hits[0][0]
+            info["evidence"] = hits[0][1]
+            if len(hits) > 1:
+                info["also_loaded"] = [h[0] for h in hits[1:]]
+        else:
+            info["compute"] = "CPU"
+    # ライブラリを読めなくても、ビルドディレクトリ名は強い手がかりになる
+    binpath = (info.get("binary") or "").lower()
+    for label, key in (("CUDA", "cuda"), ("ROCm", "rocm"), ("ROCm", "hip"),
+                       ("Vulkan", "vulkan"), ("SYCL", "sycl"),
+                       ("Metal", "metal")):
+        if key in binpath:
+            info.setdefault("compute", label)
+            info["binary_hint"] = label
+            break
+    return info
+
+
+def _gpu_amd() -> list[dict]:
+    """AMD GPU を列挙する (ROCm / Vulkan で iGPU・Radeon を使う場合に必要).
+
+    nvidia-smi しか見ていないと、ROCm や Vulkan で Radeon を使った実行で
+    GPU欄が空になる。rocm-smi があればそれを、無ければ lspci を使う。
+    """
+    gpus: list[dict] = []
+    csv = _sh(["rocm-smi", "--showproductname", "--csv"], timeout=15.0)
+    if csv:
+        lines = [ln for ln in csv.splitlines() if ln.strip()]
+        if len(lines) >= 2:
+            head = [h.strip().lower() for h in lines[0].split(",")]
+            for ln in lines[1:]:
+                cells = [c.strip() for c in ln.split(",")]
+                row = dict(zip(head, cells))
+                name = (row.get("card series") or row.get("card model")
+                        or row.get("card sku") or "")
+                if name and not name.lower().startswith("n/a"):
+                    gpus.append({"name": name, "vendor": "amd"})
+    if gpus:
+        mem = _sh(["rocm-smi", "--showmeminfo", "vram", "--csv"], timeout=15.0)
+        for ln in (mem or "").splitlines()[1:]:
+            cells = [c.strip() for c in ln.split(",")]
+            tot = next((_int(c) for c in cells[1:] if _int(c)), None)
+            idx = len([g for g in gpus if "vram_gb" in g])
+            if tot and idx < len(gpus):
+                gpus[idx]["vram_gb"] = round(tot / (1024 ** 3), 1)
+        return gpus
+    # rocm-smi が無い環境向けフォールバック
+    out = _sh(["lspci", "-mm"], timeout=10.0) or ""
+    for line in out.splitlines():
+        if not any(k in line for k in ("VGA compatible", "Display controller",
+                                       "3D controller")):
+            continue
+        if "AMD" not in line and "ATI" not in line:
+            continue
+        fields = re.findall(r'"([^"]*)"', line)
+        if len(fields) >= 3:
+            gpus.append({"name": f"{fields[1]} {fields[2]}".strip(),
+                         "vendor": "amd"})
+    return gpus
+
+
 def _cuda_version() -> str | None:
     out = _sh(["nvidia-smi", "--query", "--display=COMPUTE"]) or ""
     m = re.search(r"CUDA Version\s*:\s*([\d.]+)", out)
@@ -309,7 +493,9 @@ def _host_linux() -> dict:
             h["ram_gb"] = round(int(m.group(1)) / (1024 ** 2), 1)
     except Exception:
         pass
-    h["gpu"] = _gpu_nvidia()
+    # NVIDIA だけを見ていると、ROCm/Vulkan で Radeon (iGPU含む) を使った実行で
+    # GPU欄が空になる。AMD側も列挙する。
+    h["gpu"] = _gpu_nvidia() + _gpu_amd()
     cuda = _cuda_version()
     if cuda:
         h["cuda"] = cuda
@@ -494,6 +680,26 @@ def collect(cfg: dict | None = None, served_model: str | None = None) -> dict:
             usage = collect_gpu_usage()
             if usage:
                 backend["gpu_usage"] = usage
+            # 計算バックエンド (CUDA / ROCm / Vulkan / …)。
+            # config に runtime: を書いていればそれを正とし、検出は裏付けに回す
+            # (同じポートでビルドを差し替える運用では書き忘れが起きるため、
+            #  検出値と食い違ったら両方を残して気付けるようにする)。
+            pid = ((usage.get("inference") or {}).get("pid") if usage else None)
+            runtime = detect_runtime(
+                pid or find_server_pid(_port_of(cfg.get("base_url") or ""))
+            )
+            declared = cfg.get("runtime")
+            if declared:
+                detected = runtime.get("compute")
+                runtime["compute"] = str(declared)
+                runtime["source"] = "config"
+                if detected and detected.lower() != str(declared).lower():
+                    runtime["detected"] = detected
+                    runtime["mismatch"] = True
+            elif runtime.get("compute"):
+                runtime["source"] = "detected"
+            if runtime:
+                backend["runtime"] = runtime
         return {
             "execution": execution,
             "note": note,
@@ -540,6 +746,9 @@ def format_summary(env: dict) -> str:
         parts.append(host["cpu"])
     if host.get("ram_gb"):
         parts.append(f"RAM {host['ram_gb']}GB")
+    rt = backend.get("runtime") or {}
+    if rt.get("compute"):
+        parts.append(str(rt["compute"]))
     if backend.get("quantization"):
         parts.append(str(backend["quantization"]))
     ratio = backend.get("gpu_offload_ratio")

@@ -260,6 +260,155 @@ def test_summary_prefers_actual_inference_gpus(monkeypatch):
     assert "計12.6GB を分割" in s
 
 
+# ────────── 計算バックエンド (CUDA / ROCm / Vulkan) の判別 ──────────
+#
+# llama.cpp の /props は build_info しか返さず、どのバックエンドでビルドされたかは
+# APIから取れない。tok/s を最も左右する要素なので、プロセスのロード済み
+# ライブラリから逆算する。
+
+_MAPS = {
+    "cuda": (
+        "7f00-7f01 r--p /usr/lib/x86_64-linux-gnu/libcudart.so.13\n"
+        "7f02-7f03 r--p /usr/lib/x86_64-linux-gnu/libcublas.so.13\n"
+        "7f04-7f05 r--p /usr/lib/x86_64-linux-gnu/libc.so.6\n"
+    ),
+    "rocm": (
+        "7f00-7f01 r--p /opt/rocm/lib/libamdhip64.so.6\n"
+        "7f02-7f03 r--p /opt/rocm/lib/librocblas.so.4\n"
+    ),
+    "vulkan": (
+        "7f00-7f01 r--p /usr/lib/x86_64-linux-gnu/libvulkan.so.1\n"
+        "7f02-7f03 r--p /usr/lib/x86_64-linux-gnu/libggml-vulkan.so\n"
+    ),
+    "cpu": "7f00-7f01 r--p /usr/lib/x86_64-linux-gnu/libc.so.6\n",
+}
+
+
+def _fake_proc(monkeypatch, maps, exe):
+    monkeypatch.setattr(envinfo, "_proc_maps", lambda pid: maps)
+    monkeypatch.setattr(envinfo, "_proc_exe", lambda pid: exe)
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("cuda", "CUDA"), ("rocm", "ROCm"), ("vulkan", "Vulkan"), ("cpu", "CPU"),
+])
+def test_detect_runtime_from_loaded_libraries(monkeypatch, key, expected):
+    _fake_proc(monkeypatch, _MAPS[key], "/home/u/llama.cpp/build/bin/llama-server")
+    assert envinfo.detect_runtime(3596389)["compute"] == expected
+
+
+def test_cuda_build_loading_vulkan_is_not_misdetected(monkeypatch):
+    """CUDAビルドが libvulkan を間接ロードしていても Vulkan と誤判定しない."""
+    _fake_proc(monkeypatch, _MAPS["cuda"] + _MAPS["vulkan"], None)
+    rt = envinfo.detect_runtime(1)
+    assert rt["compute"] == "CUDA"
+    assert "Vulkan" in rt["also_loaded"]
+
+
+def test_binary_path_is_used_as_hint(monkeypatch):
+    """ライブラリを読めなくても build-rocm 等のパスから判る."""
+    _fake_proc(monkeypatch, None, "/home/u/llama.cpp/build-rocm/bin/llama-server")
+    rt = envinfo.detect_runtime(1)
+    assert rt["compute"] == "ROCm"
+    assert rt["binary_hint"] == "ROCm"
+    assert rt["binary"].endswith("build-rocm/bin/llama-server")
+
+
+def test_detect_runtime_without_pid_is_empty():
+    assert envinfo.detect_runtime(None) == {}
+
+
+def test_find_server_pid_prefers_matching_port(monkeypatch):
+    """同じポートでビルドを差し替える運用のため、ポート一致を最優先する."""
+    monkeypatch.setattr(envinfo, "_proc_cmdlines", lambda: [
+        (100, "/usr/bin/gnome-shell"),
+        (200, "/home/u/llama.cpp/build-cuda/bin/llama-server --port 9000"),
+        (300, "/home/u/llama.cpp/build-rocm/bin/llama-server --port 8085"),
+    ])
+    assert envinfo.find_server_pid(8085) == 300
+    assert envinfo.find_server_pid(None) == 200   # 指定なしなら先頭
+    monkeypatch.setattr(envinfo, "_proc_cmdlines", lambda: [(1, "/usr/bin/bash")])
+    assert envinfo.find_server_pid(8085) is None
+
+
+def test_config_runtime_overrides_detection(monkeypatch):
+    """config の runtime: を正とし、検出値と食い違ったら mismatch を立てる."""
+    _fake_proc(monkeypatch, _MAPS["cuda"], None)
+    monkeypatch.setattr(envinfo, "find_server_pid", lambda port: 1)
+    monkeypatch.setattr(envinfo, "collect_gpu_usage", lambda: {})
+    cfg = {"type": "openai", "base_url": "http://localhost:8085/v1",
+           "runtime": "llama.cpp/Vulkan"}
+    rt = envinfo.collect(cfg)["backend"]["runtime"]
+    assert rt["compute"] == "llama.cpp/Vulkan"
+    assert rt["source"] == "config"
+    assert rt["detected"] == "CUDA" and rt["mismatch"] is True
+
+
+def test_detection_used_when_config_has_no_runtime(monkeypatch):
+    _fake_proc(monkeypatch, _MAPS["rocm"], None)
+    monkeypatch.setattr(envinfo, "find_server_pid", lambda port: 1)
+    monkeypatch.setattr(envinfo, "collect_gpu_usage", lambda: {})
+    rt = envinfo.collect({"type": "openai",
+                          "base_url": "http://localhost:8085/v1"})["backend"]["runtime"]
+    assert rt["compute"] == "ROCm" and rt["source"] == "detected"
+
+
+def test_runtime_not_probed_for_remote(monkeypatch):
+    monkeypatch.setattr(envinfo, "find_server_pid",
+                        lambda port: pytest.fail("リモートでプロセス走査しない"))
+    env = envinfo.collect({"type": "openai",
+                           "base_url": "https://api.example.invalid/v1"})
+    assert "runtime" not in env["backend"]
+
+
+def test_amd_gpu_is_enumerated(monkeypatch):
+    """ROCm/Vulkan で Radeon を使う場合、nvidia-smi だけではGPU欄が空になる."""
+    def _sh(cmd, timeout=None):
+        if cmd[0] == "rocm-smi" and "--showproductname" in cmd:
+            return ("device,Card Series,Card Model,Card Vendor\n"
+                    "card0,Radeon 8060S Graphics,0x150e,AMD")
+        return None
+
+    monkeypatch.setattr(envinfo, "_sh", _sh)
+    assert envinfo._gpu_amd() == [
+        {"name": "Radeon 8060S Graphics", "vendor": "amd"}]
+
+
+def test_amd_gpu_falls_back_to_lspci(monkeypatch):
+    def _sh(cmd, timeout=None):
+        if cmd[0] == "lspci":
+            return ('c5:00.0 "VGA compatible controller" "AMD/ATI" '
+                    '"Radeon 8060S" -r10 "AMD" "Device 150e"')
+        return None
+
+    monkeypatch.setattr(envinfo, "_sh", _sh)
+    gpus = envinfo._gpu_amd()
+    assert gpus and gpus[0]["vendor"] == "amd" and "Radeon" in gpus[0]["name"]
+
+
+def test_report_shows_compute_backend_and_mismatch():
+    env = {"execution": "local", "host": {}, "backend": {
+        "kind": "llama.cpp", "runtime": {
+            "compute": "llama.cpp/Vulkan", "source": "config",
+            "detected": "CUDA", "mismatch": True,
+            "binary": "/home/u/llama.cpp/build-cuda/bin/llama-server"}}}
+    md = "\n".join(_env_section(env))
+    assert "計算バックエンド" in md
+    assert "llama.cpp/Vulkan (config指定)" in md
+    assert "検出値は **CUDA** で不一致" in md
+    assert "build-cuda/bin/llama-server" in md
+
+
+def test_report_shows_detected_backend_with_evidence():
+    env = {"execution": "local", "host": {}, "backend": {
+        "kind": "llama.cpp", "runtime": {
+            "compute": "ROCm", "source": "detected",
+            "evidence": ["libamdhip64.so.6", "librocblas.so.4"]}}}
+    md = "\n".join(_env_section(env))
+    assert "ROCm (自動検出) — libamdhip64.so.6, librocblas.so.4" in md
+    assert "不一致" not in md
+
+
 # ────────────────────────── レポート出力 ──────────────────────────
 
 

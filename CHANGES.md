@@ -1,3 +1,33 @@
+# ⚙️ 計算バックエンド(CUDA/ROCm/Vulkan)の判別と AMD GPU の列挙 (2026-07-31)
+
+llama.cpp を CUDA / ROCm / Vulkan の3ビルドで使い分けている環境で、**どのバックエンドで
+測ったのかがレポートに出ない**問題。`/props` は `build_info` (例 `b10157-c6292cfb8`) しか
+返さず、バックエンドは API から一切取れない。tok/s を最も左右する要素なので空欄にできない。
+あわせて、Linux の GPU 検出が `nvidia-smi` のみで、ROCm/Vulkan で Radeon (APUの内蔵GPU含む)
+を使った実行では **GPU欄が空になる** 問題も修正した。
+
+- `llmbench/env.py` に `detect_runtime()` / `find_server_pid()` を追加
+  - `/proc/<pid>/maps` のロード済みライブラリから CUDA / ROCm / SYCL / Vulkan / Metal / CPU
+    を判別 (root不要)。ggmlをバックエンド別 .so に分けたビルドでも、静的リンクした
+    ビルド (libcudart / libamdhip64 が直接見える) でも判る
+  - 判定順は CUDA/ROCm/SYCL を先にし、CUDAビルドが libvulkan を間接ロードしていても
+    Vulkan と誤判定しない (併載は `also_loaded` に残す)
+  - `/proc/<pid>/exe` から実行バイナリの実体パスも記録。ライブラリを読めない場合は
+    `build-cuda` / `build-rocm` 等のディレクトリ名から判定する
+  - PIDは **base_url のポート一致を最優先**して探す (同じポートでビルドを差し替える運用向け)
+- config の models エントリに `runtime:` を書けばそちらを正とする。検出値と食い違えば
+  `mismatch: true` を立て、レポートに ⚠️ を出す (ビルド差し替え時の直し忘れ検出)
+- `_gpu_amd()` を追加。`rocm-smi --showproductname --csv` (無ければ `lspci`) で AMD GPU を列挙
+- `llmbench/report.py`: 「計算バックエンド」「実行バイナリ」行を追加。
+  自動検出時は根拠ライブラリ名を併記する
+- `format_summary()`: マルチGPU機で搭載1枚目 (RTX 3090) だけがログに出ていたのを、
+  実際に推論が載ったGPU構成を出すよう修正
+- テスト15件追加 (計156件): CUDA/ROCm/Vulkan/CPU の判別・Vulkan誤判定の回避・
+  バイナリパスからの推定・ポート一致でのPID選択・config上書きと不一致検出・
+  リモートではプロセス走査しない・AMD GPU列挙 (rocm-smi / lspci) ・レポート表示
+
+---
+
 # 🎮 マルチGPU機で「どのGPUに何GB載ったか」を記録 (2026-07-31)
 
 RTX 3090 + RTX 5090 の混載機 (Ubuntu) で実測したところ、レポートに搭載GPUが2枚並ぶだけで

@@ -96,6 +96,20 @@ def _env_section(env: dict) -> list[str]:
     # ── 推論バックエンド (ローカル推論のときだけ速度に効く) ──
     if backend.get("kind"):
         rows.append(("推論バックエンド", str(backend["kind"])))
+    # 計算バックエンド (CUDA/ROCm/Vulkan…)。llama.cpp は API から取れないため、
+    # 推論プロセスのロード済みライブラリから逆算した値が入る。
+    rt = backend.get("runtime") or {}
+    if rt.get("compute"):
+        val = str(rt["compute"])
+        val += " (config指定)" if rt.get("source") == "config" else " (自動検出)"
+        if rt.get("evidence"):
+            val += f" — {', '.join(rt['evidence'][:3])}"
+        if rt.get("mismatch"):
+            val += (f"  ⚠️ 検出値は **{rt.get('detected')}** で不一致 "
+                    "— configの runtime: が実態とずれている可能性")
+        rows.append(("計算バックエンド", val))
+    if rt.get("binary"):
+        rows.append(("実行バイナリ", f"`{rt['binary']}`"))
     if backend.get("server_version"):
         rows.append(("サーバ", str(backend["server_version"])))
     if backend.get("quantization"):
