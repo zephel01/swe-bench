@@ -409,6 +409,175 @@ def test_report_shows_detected_backend_with_evidence():
     assert "不一致" not in md
 
 
+# ────────── 起動引数からの推論構成 (--device / -ngl / …) ──────────
+#
+# llama.cpp の /props は GPUオフロード量 (-ngl) も使用デバイス (--device) も
+# 返さない。起動引数には全部書いてあるので、CUDA/ROCm/Vulkan 共通でここを読む。
+
+# 実機の llama-server 起動引数 (ROCm ビルド)
+_ROCM_ARGV = [
+    "/home/u/llama.cpp/build-rocm/bin/llama-server",
+    "-m", "/mnt/data/models/Qwythos-9B-v2-GGUF/Qwythos-9B-v2-MTP-Q8_0.gguf",
+    "--port", "8085", "--device", "ROCm0", "--spec-type", "draft-mtp",
+    "-ngl", "0", "--ctx-size", "32768", "--threads", "16", "--mlock",
+]
+_HOST_GPUS = [
+    {"name": "NVIDIA GeForce RTX 3090", "vendor": "nvidia"},
+    {"name": "NVIDIA GeForce RTX 5090", "vendor": "nvidia"},
+    {"name": "AMD Radeon 8060S Graphics", "vendor": "amd"},
+]
+
+
+def test_parse_server_args_reads_real_launch_line():
+    a = envinfo.parse_server_args(_ROCM_ARGV)
+    assert a["device"] == "ROCm0"
+    assert a["n_gpu_layers"] == 0        # GPUに1層も載せていない
+    assert a["n_ctx"] == 32768
+    assert a["threads"] == 16
+    assert a["spec_type"] == "draft-mtp"
+    assert a["mlock"] is True
+
+
+def test_parse_server_args_short_and_long_forms():
+    a = envinfo.parse_server_args(
+        ["llama-server", "-c", "4096", "--n-gpu-layers", "99",
+         "-ts", "0,1", "-mg", "1", "-fa"])
+    assert a["n_ctx"] == 4096 and a["n_gpu_layers"] == 99
+    assert a["tensor_split"] == "0,1" and a["main_gpu"] == 1
+    assert a["flash_attn"] is True
+
+
+def test_launch_command_redacts_secrets():
+    """results.json は共有されうるので、起動引数の秘匿値は必ず伏せる."""
+    cmd = envinfo._redact_argv(
+        ["llama-server", "--api-key", "sk-TOPSECRET", "--port", "8085",
+         "--api-key-file=/etc/TOPSECRET"])
+    assert "TOPSECRET" not in cmd
+    assert "--api-key ***" in cmd and "--port 8085" in cmd
+
+
+@pytest.mark.parametrize("dev,expected", [
+    ("ROCm0", "AMD Radeon 8060S Graphics"),
+    ("CUDA0", "NVIDIA GeForce RTX 3090"),
+    ("CUDA1", "NVIDIA GeForce RTX 5090"),
+])
+def test_resolve_device_maps_to_real_gpu(dev, expected):
+    assert envinfo.resolve_device(dev, _HOST_GPUS)["device_name"] == expected
+
+
+def test_resolve_device_vulkan_uses_vulkaninfo(monkeypatch):
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: (
+        "GPU0:\n\tdeviceName = NVIDIA GeForce RTX 3090\n"
+        "GPU1:\n\tdeviceName = NVIDIA GeForce RTX 5090\n"
+        "GPU2:\n\tdeviceName = AMD Radeon 8060S Graphics (RADV GFX1151)\n"))
+    r = envinfo.resolve_device("Vulkan2", _HOST_GPUS)
+    assert r["device_name"] == "AMD Radeon 8060S Graphics (RADV GFX1151)"
+    assert "device_name_uncertain" not in r
+
+
+def test_resolve_device_vulkan_falls_back_with_uncertainty(monkeypatch):
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: None)  # vulkaninfo無し
+    r = envinfo.resolve_device("Vulkan2", _HOST_GPUS)
+    assert r["device_name"] == "AMD Radeon 8060S Graphics"
+    assert r["device_name_uncertain"] is True
+
+
+def test_resolve_device_unparsable_is_kept_as_is():
+    assert envinfo.resolve_device("none", [])["device"] == "none"
+    assert envinfo.resolve_device("", []) == {}
+
+
+def _fake_local_server(monkeypatch, argv, maps, env_vars=None):
+    monkeypatch.setattr(envinfo, "find_server_pid", lambda port: 4242)
+    monkeypatch.setattr(envinfo, "_proc_argv", lambda pid: argv)
+    monkeypatch.setattr(envinfo, "_proc_maps", lambda pid: maps)
+    monkeypatch.setattr(envinfo, "_proc_exe", lambda pid: argv[0])
+    monkeypatch.setattr(envinfo, "_proc_visible_env", lambda pid: env_vars or {})
+    monkeypatch.setattr(envinfo, "collect_host", lambda: {"gpu": _HOST_GPUS})
+    monkeypatch.setattr(envinfo, "collect_backend",
+                        lambda cfg, sm=None: {"kind": "llama.cpp"})
+
+
+def test_collect_records_device_and_ngl(monkeypatch):
+    _fake_local_server(monkeypatch, _ROCM_ARGV, _MAPS["rocm"],
+                       {"HIP_VISIBLE_DEVICES": "0"})
+    monkeypatch.setattr(envinfo, "collect_gpu_usage", lambda: {})
+    launch = envinfo.collect({"type": "openai",
+                              "base_url": "http://localhost:8085/v1"}
+                             )["backend"]["launch"]
+    assert launch["device"] == "ROCm0"
+    assert launch["device_name"] == "AMD Radeon 8060S Graphics"
+    assert launch["n_gpu_layers"] == 0
+    assert launch["visible_devices_env"] == {"HIP_VISIBLE_DEVICES": "0"}
+    assert "llama-server" in launch["command"]
+
+
+def test_nvidia_attribution_suppressed_for_non_cuda_runtime(monkeypatch):
+    """Vulkanビルドが nvidia-smi に数十MiBで顔を出しても推論GPUと誤認しない.
+
+    実機で「Radeon で動いているのに RTX 3090 0.0GB」と出た回帰の再発防止。
+    """
+    _fake_local_server(monkeypatch, ["llama-server", "--device", "Vulkan2"],
+                       _MAPS["vulkan"])
+    monkeypatch.setattr(envinfo, "collect_gpu_usage", lambda: {
+        "inference": {"pid": 1, "process": "llama-server", "multi_gpu": False,
+                      "vram_total_gb": 0.0,
+                      "gpus": [{"index": 0, "name": "NVIDIA GeForce RTX 3090",
+                                "vram_gb": 0.0}]},
+        "gpus": [{"index": 0, "name": "NVIDIA GeForce RTX 3090"}]})
+    backend = envinfo.collect({"type": "openai",
+                               "base_url": "http://localhost:8085/v1"})["backend"]
+    assert "inference" not in backend["gpu_usage"]
+    assert "Vulkan" in backend["gpu_usage"]["note"]
+    # 代わりに起動引数由来のデバイスが残る
+    assert backend["launch"]["device"] == "Vulkan2"
+
+
+def test_cuda_runtime_keeps_nvidia_attribution(monkeypatch):
+    _fake_local_server(monkeypatch, ["llama-server", "-ngl", "99"],
+                       _MAPS["cuda"])
+    monkeypatch.setattr(envinfo, "collect_gpu_usage", lambda: {
+        "inference": {"pid": 1, "multi_gpu": False, "vram_total_gb": 6.6,
+                      "gpus": [{"index": 1, "name": "RTX 5090",
+                                "vram_gb": 6.6}]}})
+    usage = envinfo.collect({"type": "openai",
+                             "base_url": "http://localhost:8085/v1"}
+                            )["backend"]["gpu_usage"]
+    assert usage["inference"]["gpus"][0]["name"] == "RTX 5090"
+
+
+def test_summary_shows_device_and_flags_ngl_zero():
+    env = {"execution": "local", "host": {"gpu": _HOST_GPUS}, "backend": {
+        "launch": {"device": "ROCm0", "device_name": "AMD Radeon 8060S Graphics",
+                   "n_gpu_layers": 0}}}
+    s = envinfo.format_summary(env)
+    assert "AMD Radeon 8060S Graphics" in s
+    assert "-ngl 0 (GPU未使用)" in s
+
+
+def test_report_flags_ngl_zero_as_cpu_execution():
+    env = {"execution": "local", "host": {}, "backend": {
+        "kind": "llama.cpp",
+        "runtime": {"compute": "ROCm", "source": "detected"},
+        "launch": {"device": "ROCm0", "device_name": "AMD Radeon 8060S Graphics",
+                   "n_gpu_layers": 0, "threads": 16, "n_ctx": 32768,
+                   "command": "llama-server --device ROCm0 -ngl 0"}}}
+    md = "\n".join(_env_section(env))
+    assert "使用デバイス" in md and "ROCm0 — AMD Radeon 8060S Graphics" in md
+    assert "GPUに1層も載せていない" in md
+    assert "実質CPU実行" in md
+    assert "起動コマンド" in md
+
+
+def test_report_ngl_positive_has_no_cpu_warning():
+    env = {"execution": "local", "host": {}, "backend": {
+        "kind": "llama.cpp",
+        "launch": {"device": "Vulkan2", "n_gpu_layers": 99}}}
+    md = "\n".join(_env_section(env))
+    assert "`-ngl 99`" in md
+    assert "実質CPU実行" not in md
+
+
 # ────────────────────────── レポート出力 ──────────────────────────
 
 

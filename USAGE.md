@@ -555,6 +555,33 @@ Issue言語: `en` / タスク数: 20 / 試行: ×5
 | クラウドAPI (`type: openai`, リモート) | 記録するが**速度には無関係** | エンドポイントとモデル名のみ |
 | サブスクCLI (`type: cli`) | 同上 | preset 名とモデル名のみ |
 
+#### 起動引数から読む推論構成（`--device` / `-ngl`）
+
+llama.cpp の `/props` は **GPUオフロード量 (`-ngl`) も使用デバイス (`--device`) も
+返しません**。一方、起動引数には全部書いてあります。`/proc/<pid>/cmdline` を読めば
+CUDA / ROCm / Vulkan のどれでも同じ方法で取れるので、ここを一次情報にしています。
+
+```markdown
+| 使用デバイス | ROCm0 — AMD Radeon 8060S Graphics |
+| GPUオフロード | ⚠️ `-ngl 0` — **GPUに1層も載せていない(実質CPU実行)**。tok/s はCPU性能の値 |
+| スレッド | `16` |
+| 起動コマンド | `llama-server -m ... --device ROCm0 -ngl 0 --ctx-size 32768 ...` |
+```
+
+記録されるのは `--device` / `-ngl` / `--ctx-size` / `--threads` / `--tensor-split` /
+`--main-gpu` / `--split-mode` / `--batch-size` / `--spec-type` と、`--mlock` `-fa` 等の
+フラグ、`HIP_VISIBLE_DEVICES` のような可視デバイス制限の環境変数です。再現用に
+起動コマンド全文も残しますが、`--api-key` のような**秘匿値は `***` に伏せます**。
+
+> [!WARNING]
+> **`-ngl 0` は「バックエンドは ROCm だがモデルはGPUに載っていない」状態**です。
+> `--device ROCm0` を指定していても 0 層なら計算はCPUで走るため、tok/s はCPU性能の
+> 値になります。レポートはこの場合に明示的な警告を出します。
+
+`ROCm0` / `Vulkan2` / `CUDA0` といったデバイス名は実GPU名にも解決します。
+CUDA・ROCm は該当ベンダのGPU一覧の N 番目、Vulkan は `vulkaninfo --summary` の
+列挙順で引きます（`vulkaninfo` が無ければ搭載順で推定し、その旨を併記します）。
+
 #### 計算バックエンド (CUDA / ROCm / Vulkan) の記録
 
 llama.cpp の `/props` は `build_info`（例 `b10157-c6292cfb8`）しか返さず、

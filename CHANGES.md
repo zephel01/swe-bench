@@ -1,3 +1,43 @@
+# 🎯 起動引数から推論構成を読む (--device / -ngl) と誤GPU紐づけの修正 (2026-07-31)
+
+RTX 3090 + RTX 5090 + Radeon 8060S(APU内蔵) の実機で ROCm/Vulkan ビルドを検証したところ、
+2つの実害が判明した。
+
+1. **ROCm実行なのにレポートが RTX 3090 と表示**: 推論GPUを特定できず搭載GPUの1枚目に
+   フォールバックしていた
+2. **Vulkan実行で RTX 3090 0.0GB と誤表示**: 実際は Vulkan2 (Radeon 8060S) で動いているのに、
+   Vulkanビルドが全Vulkanデバイスにコンテキストを張る影響で nvidia-smi の compute-apps に
+   数十MiBで顔を出し、それを推論GPUと誤認していた
+
+さらに実機の起動引数を確認すると `--device ROCm0 ... -ngl 0` であり、**バックエンドはROCmだが
+モデルはGPUに1層も載っていない**(実質CPU実行)状態だった。ROCm 27.5 tok/s と Vulkan 36.5 tok/s の
+差は「バックエンドの差」ではなく「CPU実行 vs GPU実行」の差であり、これを記録していなかったため
+結果を誤読しかねなかった。
+
+nvidia-smi から推測する設計自体が誤りで、起動引数を読むのが正しい。
+
+- `llmbench/env.py`:
+  - `parse_server_args()` / `collect_launch()` を追加。`/proc/<pid>/cmdline` (NUL区切りで
+    正しく分解) から `--device` `-ngl` `--ctx-size` `--threads` `--tensor-split` `--main-gpu`
+    `--split-mode` `--batch-size` `--spec-type` とフラグ類を取得。`/proc/<pid>/environ` からは
+    `HIP_VISIBLE_DEVICES` 等の可視デバイス制限のみを拾う (他は秘匿情報を含みうるため)
+  - 再現用に起動コマンド全文を残すが、`--api-key` 等の秘匿値は `***` に伏せる
+  - `resolve_device()` を追加。`ROCm0`/`CUDA1` は該当ベンダのGPU一覧、`Vulkan2` は
+    `vulkaninfo --summary` の列挙順で実GPU名に解決 (vulkaninfo が無ければ搭載順で推定し
+    `device_name_uncertain` を立てる)
+  - **計算バックエンドが CUDA 以外のとき、nvidia-smi 由来の推論GPU判定を採用しない**よう変更
+    (上記2の再発防止)。理由を `gpu_usage.note` に残す
+  - `_gpu_amd()` の lspci フォールバックがベンダ名とデバイス名を連結していたのを、
+    デバイス名のみを使うよう修正
+  - `format_summary()`: 起動引数のデバイスを最優先し、`-ngl 0` なら警告を出す
+- `llmbench/report.py`: 「使用デバイス」「GPUオフロード」「スレッド」「起動コマンド」等を追加。
+  `-ngl 0` のときは表と本文の両方で「GPUに載っていない(実質CPU実行)」と警告
+- テスト15件追加 (計171件): 実機の起動引数のパース・短縮形/長形式・秘匿値の伏字・
+  ROCm/CUDA/Vulkanのデバイス解決・vulkaninfo無し時の推定・`-ngl 0` の警告・
+  非CUDAランタイムでの誤紐づけ抑止 (回帰防止)
+
+---
+
 # ⚙️ 計算バックエンド(CUDA/ROCm/Vulkan)の判別と AMD GPU の列挙 (2026-07-31)
 
 llama.cpp を CUDA / ROCm / Vulkan の3ビルドで使い分けている環境で、**どのバックエンドで

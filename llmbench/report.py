@@ -129,6 +129,33 @@ def _env_section(env: dict) -> list[str]:
             + (f" (VRAM常駐 {vr} GB)" if vr is not None else "")
             + note,
         ))
+    # 起動引数から読んだ推論構成。llama.cpp は /props に GPUオフロード情報を
+    # 持たないため、-ngl と --device がここでの実質的な決め手になる。
+    launch = backend.get("launch") or {}
+    if launch.get("device"):
+        val = str(launch["device"])
+        if launch.get("device_name"):
+            val += f" — {launch['device_name']}"
+            if launch.get("device_name_uncertain"):
+                val += " (列挙順からの推定)"
+        rows.append(("使用デバイス", val))
+    ngl = launch.get("n_gpu_layers")
+    if ngl is not None:
+        if ngl == 0:
+            rows.append(("GPUオフロード", "⚠️ `-ngl 0` — **GPUに1層も載せていない"
+                                        "(実質CPU実行)**。tok/s はCPU性能の値"))
+        else:
+            rows.append(("GPUオフロード", f"`-ngl {ngl}`"))
+    for key, label in (("tensor_split", "tensor split"),
+                       ("main_gpu", "main GPU"), ("split_mode", "split mode"),
+                       ("threads", "スレッド"), ("batch_size", "batch"),
+                       ("spec_type", "投機デコード")):
+        if launch.get(key) is not None:
+            rows.append((label, f"`{launch[key]}`"))
+    if launch.get("visible_devices_env"):
+        rows.append(("可視デバイス制限", ", ".join(
+            f"`{k}={v}`" for k, v in launch["visible_devices_env"].items())))
+
     # 実際に推論プロセスが載っていたGPU (マルチGPUの分割ロードもここで判る)
     inf = (backend.get("gpu_usage") or {}).get("inference") or {}
     if inf.get("gpus"):
@@ -153,6 +180,8 @@ def _env_section(env: dict) -> list[str]:
         rows.append(("モデルファイル", f"`{backend['model_path']}`"))
     if backend.get("base_url"):
         rows.append(("エンドポイント", f"`{backend['base_url']}`"))
+    if launch.get("command"):
+        rows.append(("起動コマンド", f"`{launch['command']}`"))
     if backend.get("note"):
         rows.append(("備考", str(backend["note"])))
     if env.get("collect_error") or backend.get("collect_error"):
@@ -163,6 +192,10 @@ def _env_section(env: dict) -> list[str]:
     if rows:
         lines += ["", "| 項目 | 値 |", "|---|---|"]
         lines += [f"| {k} | {v} |" for k, v in rows]
+    if launch.get("n_gpu_layers") == 0:
+        lines += ["", "> ⚠️ `-ngl 0` のため**モデルはGPUに載っていません**"
+                      "（計算バックエンドの表示に関わらず実質CPU実行）。"
+                      "GPU実行の結果と同列に比較しないでください。"]
     if inf.get("multi_gpu"):
         lines += ["", "> ⚠️ モデルが**複数GPUに分割ロード**されています。"
                       "スループットは遅い側のカードとGPU間転送に律速されるため、"

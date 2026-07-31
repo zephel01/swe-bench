@@ -402,6 +402,159 @@ def detect_runtime(pid: int | None) -> dict:
     return info
 
 
+# ── 起動引数から推論構成を読む ──────────────────────────────────────────
+#
+# llama.cpp の /props は n_ctx と build_info しか返さず、**GPUオフロード量
+# (-ngl) も使用デバイス (--device) も取れない**。しかし起動引数には全部書いて
+# ある。CUDA / ROCm / Vulkan のどれでも同じ方法で読めるので、ここが最も確実。
+_ARG_VALUE_KEYS = {
+    "-ngl": "n_gpu_layers", "--n-gpu-layers": "n_gpu_layers",
+    "--gpu-layers": "n_gpu_layers",
+    "-c": "n_ctx", "--ctx-size": "n_ctx",
+    "-t": "threads", "--threads": "threads",
+    "-ts": "tensor_split", "--tensor-split": "tensor_split",
+    "-mg": "main_gpu", "--main-gpu": "main_gpu",
+    "-sm": "split_mode", "--split-mode": "split_mode",
+    "-dev": "device", "--device": "device",
+    "-np": "parallel", "--parallel": "parallel",
+    "-b": "batch_size", "--batch-size": "batch_size",
+    "-ub": "ubatch_size", "--ubatch-size": "ubatch_size",
+    "--spec-type": "spec_type",
+    "-md": "draft_model", "--model-draft": "draft_model",
+}
+_ARG_FLAGS = {
+    "--mlock": "mlock", "--no-mmap": "no_mmap",
+    "-fa": "flash_attn", "--flash-attn": "flash_attn",
+    "-cb": "cont_batching", "--cont-batching": "cont_batching",
+}
+_INT_ARGS = ("n_gpu_layers", "n_ctx", "threads", "parallel", "main_gpu",
+             "batch_size", "ubatch_size")
+# 起動引数に混ざりうる秘匿値 (results.json は共有されうるので必ず伏せる)
+_SECRET_ARGS = ("key", "token", "secret", "password", "passwd")
+# 可視デバイスを絞る環境変数 (--device と併用されると実際の割当がずれる)
+_VISIBLE_ENV = ("CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES",
+                "ROCR_VISIBLE_DEVICES", "GGML_VK_VISIBLE_DEVICES",
+                "GPU_DEVICE_ORDINAL")
+
+
+def parse_server_args(argv: list[str]) -> dict:
+    """llama-server の argv から推論構成を抜き出す (秘匿値は伏せる)."""
+    out: dict = {}
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in _ARG_FLAGS:
+            out[_ARG_FLAGS[tok]] = True
+            i += 1
+            continue
+        key = _ARG_VALUE_KEYS.get(tok)
+        if key and i + 1 < len(argv):
+            out[key] = argv[i + 1]
+            i += 2
+            continue
+        i += 1
+    for k in _INT_ARGS:
+        if k in out and _int(out[k]) is not None:
+            out[k] = _int(out[k])
+    return out
+
+
+def _redact_argv(argv: list[str]) -> str:
+    """再現用に起動コマンドを1行で残す. --api-key 等の値は伏せる."""
+    safe: list[str] = []
+    redact_next = False
+    for tok in argv:
+        if redact_next:
+            safe.append("***")
+            redact_next = False
+            continue
+        low = tok.lower()
+        if low.startswith("-") and any(s in low for s in _SECRET_ARGS):
+            if "=" in tok:
+                safe.append(tok.split("=", 1)[0] + "=***")
+                continue
+            safe.append(tok)
+            redact_next = True
+            continue
+        safe.append(tok)
+    return " ".join(safe)
+
+
+def _proc_argv(pid: int) -> list[str]:
+    """/proc/<pid>/cmdline を NUL 区切りで正しく分解する (空白入りパス対策)."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            raw = f.read()
+    except Exception:
+        return []
+    return [a for a in raw.decode("utf-8", "replace").split("\x00") if a]
+
+
+def _proc_visible_env(pid: int) -> dict:
+    """可視デバイスを絞る環境変数だけを拾う (他の環境変数は秘匿情報を含みうる)."""
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            raw = f.read()
+    except Exception:
+        return {}
+    env = {}
+    for item in raw.decode("utf-8", "replace").split("\x00"):
+        k, _, v = item.partition("=")
+        if k in _VISIBLE_ENV and v:
+            env[k] = v
+    return env
+
+
+def _vulkan_device_names() -> list[str]:
+    """vulkaninfo --summary の列挙順のデバイス名 (Vulkan<N> の解決に使う)."""
+    out = _sh(["vulkaninfo", "--summary"], timeout=20.0) or ""
+    return [m.group(1).strip()
+            for m in re.finditer(r"deviceName\s*=\s*(.+)", out)]
+
+
+def resolve_device(dev: str, host_gpus: list[dict]) -> dict:
+    """``ROCm0`` / ``Vulkan2`` / ``CUDA0`` を実GPU名に解決する."""
+    m = re.fullmatch(r"([A-Za-z]+)(\d+)", (dev or "").strip())
+    if not m:
+        return {"device": dev} if dev else {}
+    kind, idx = m.group(1), int(m.group(2))
+    info: dict = {"device": dev, "device_kind": kind, "device_index": idx}
+    low = kind.lower()
+    if low in ("cuda", "rocm", "hip"):
+        vendor = "nvidia" if low == "cuda" else "amd"
+        pool = [g for g in host_gpus if g.get("vendor") == vendor]
+        if idx < len(pool):
+            info["device_name"] = pool[idx].get("name")
+    elif low == "vulkan":
+        names = _vulkan_device_names()
+        if idx < len(names):
+            info["device_name"] = names[idx]
+        elif idx < len(host_gpus):
+            # vulkaninfo が無い環境。ggml の Vulkan 列挙順は概ね PCI 順なので
+            # 搭載順で当てるが、確証がないことを明示する。
+            info["device_name"] = host_gpus[idx].get("name")
+            info["device_name_uncertain"] = True
+    return info
+
+
+def collect_launch(pid: int | None, host_gpus: list[dict] | None = None) -> dict:
+    """推論サーバの起動構成 (デバイス・-ngl・n_ctx 等) を収集する."""
+    if not pid:
+        return {}
+    argv = _proc_argv(pid)
+    if not argv:
+        return {}
+    launch = parse_server_args(argv)
+    launch["command"] = _redact_argv(argv)
+    dev = launch.pop("device", None)
+    if dev:
+        launch.update(resolve_device(str(dev), host_gpus or []))
+    env = _proc_visible_env(pid)
+    if env:
+        launch["visible_devices_env"] = env
+    return launch
+
+
 def _gpu_amd() -> list[dict]:
     """AMD GPU を列挙する (ROCm / Vulkan で iGPU・Radeon を使う場合に必要).
 
@@ -438,10 +591,11 @@ def _gpu_amd() -> list[dict]:
             continue
         if "AMD" not in line and "ATI" not in line:
             continue
+        # -mm の並びは class, vendor, device, subvendor, subdevice。
+        # デバイス名 (fields[2]) が製品名なのでそれを使う。
         fields = re.findall(r'"([^"]*)"', line)
-        if len(fields) >= 3:
-            gpus.append({"name": f"{fields[1]} {fields[2]}".strip(),
-                         "vendor": "amd"})
+        if len(fields) >= 3 and fields[2]:
+            gpus.append({"name": fields[2], "vendor": "amd"})
     return gpus
 
 
@@ -672,22 +826,21 @@ def collect(cfg: dict | None = None, served_model: str | None = None) -> dict:
     cfg = cfg or {}
     try:
         execution, note = _execution_kind(cfg)
+        host = collect_host()
         backend = collect_backend(cfg, served_model)
         if execution == "local":
-            # どのGPUに何GB載ったか (マルチGPUの分割ロードもここで分かる)。
-            # llama.cpp は /props にGPUオフロード情報を持たないため、
-            # このVRAM占有量が実質的なオフロード量の代理指標になる。
+            # サーバのPIDを起点に構成を集める。ポート一致を最優先で探すので、
+            # 同じポートでビルドを差し替える運用でも今あがっている方を掴む。
+            pid = find_server_pid(_port_of(cfg.get("base_url") or ""))
             usage = collect_gpu_usage()
-            if usage:
-                backend["gpu_usage"] = usage
+            pid = pid or ((usage.get("inference") or {}).get("pid")
+                          if usage else None)
+
             # 計算バックエンド (CUDA / ROCm / Vulkan / …)。
             # config に runtime: を書いていればそれを正とし、検出は裏付けに回す
             # (同じポートでビルドを差し替える運用では書き忘れが起きるため、
             #  検出値と食い違ったら両方を残して気付けるようにする)。
-            pid = ((usage.get("inference") or {}).get("pid") if usage else None)
-            runtime = detect_runtime(
-                pid or find_server_pid(_port_of(cfg.get("base_url") or ""))
-            )
+            runtime = detect_runtime(pid)
             declared = cfg.get("runtime")
             if declared:
                 detected = runtime.get("compute")
@@ -700,10 +853,29 @@ def collect(cfg: dict | None = None, served_model: str | None = None) -> dict:
                 runtime["source"] = "detected"
             if runtime:
                 backend["runtime"] = runtime
+
+            # 起動引数 (--device / -ngl / --ctx-size …)。llama.cpp では
+            # /props にGPUオフロード情報が無く、-ngl が実質的なオフロード量。
+            launch = collect_launch(pid, host.get("gpu") or [])
+            if launch:
+                backend["launch"] = launch
+
+            if usage:
+                # ROCm/Vulkan ビルドでも nvidia-smi の compute-apps に数十MiBで
+                # 顔を出すことがあり、それを推論GPUと誤認すると「Radeonで動いて
+                # いるのに RTX 3090」と出る。CUDA以外では紐づけを採用しない。
+                compute = (runtime.get("compute") or "").lower()
+                if compute and not compute.startswith("cuda"):
+                    usage.pop("inference", None)
+                    usage["note"] = (
+                        f"計算バックエンドが {runtime.get('compute')} のため、"
+                        "nvidia-smi 由来の推論GPU判定は採用していない"
+                    )
+                backend["gpu_usage"] = usage
         return {
             "execution": execution,
             "note": note,
-            "host": collect_host(),
+            "host": host,
             "backend": backend,
         }
     except Exception as e:
@@ -725,10 +897,17 @@ def format_summary(env: dict) -> str:
                 parts.append(str(backend[key]))
         parts.append("推論はリモート実行")
         return " / ".join(parts)
-    # 実際に推論が載ったGPUが判っているならそれを優先 (マルチGPU機では
-    # 搭載GPUの1枚目を出すと誤解を生む)
+    # 起動引数で指定されたデバイスが最も確実 (ROCm/Vulkan でも取れる)
+    launch = backend.get("launch") or {}
     inf = (backend.get("gpu_usage") or {}).get("inference") or {}
-    if inf.get("gpus"):
+    if launch.get("device"):
+        parts.append(launch.get("device_name") or launch["device"])
+        ngl = launch.get("n_gpu_layers")
+        if ngl == 0:
+            parts.append("⚠️ -ngl 0 (GPU未使用)")
+        elif ngl is not None:
+            parts.append(f"-ngl {ngl}")
+    elif inf.get("gpus"):
         parts.append(" + ".join(
             f"{g.get('name', 'GPU')} {g.get('vram_gb', 0)}GB"
             for g in inf["gpus"]
