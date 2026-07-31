@@ -456,19 +456,28 @@ def test_launch_command_redacts_secrets():
     assert "--api-key ***" in cmd and "--port 8085" in cmd
 
 
-# 実機の `llama-server --list-devices` 出力 (CUDA ビルド)。
+# ── 実機 (NucBox EVO-X2) の `llama-server --list-devices` 出力そのまま ──
+#
 # ★ CUDA の既定順は FASTEST_FIRST なので CUDA0 が RTX 5090。
 #   nvidia-smi は PCI バス順で GPU0 が RTX 3090 → 添字で引くと逆になる。
+# ★ 同じ GPU でもビルドが違えば ID も番号も違う:
+#     RTX 3090       → CUDA1 / Vulkan0
+#     RTX 5090       → CUDA0 / Vulkan1
+#     Radeon 8060S   → ROCm0 / Vulkan2 (名前の表記まで違う)
 _LIST_DEVICES_CUDA = (
     "Available devices:\n"
-    "  CUDA0: NVIDIA GeForce RTX 5090 (32149 MiB, 31610 MiB free)\n"
-    "  CUDA1: NVIDIA GeForce RTX 3090 (24123 MiB, 23800 MiB free)\n"
+    "  CUDA0: NVIDIA GeForce RTX 5090 (32149 MiB, 31136 MiB free)\n"
+    "  CUDA1: NVIDIA GeForce RTX 3090 (24123 MiB, 16522 MiB free)\n"
+)
+_LIST_DEVICES_ROCM = (
+    "Available devices:\n"
+    "  ROCm0: AMD Radeon 8060S Graphics (98304 MiB, 15342 MiB free)\n"
 )
 _LIST_DEVICES_VULKAN = (
     "Available devices:\n"
-    "  Vulkan0: NVIDIA GeForce RTX 3090 (24576 MiB, 24000 MiB free)\n"
-    "  Vulkan1: NVIDIA GeForce RTX 5090 (32607 MiB, 32000 MiB free)\n"
-    "  Vulkan2: AMD Radeon Graphics (RADV GFX1151) (114166 MiB, 113602 MiB free)\n"
+    "  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 17008 MiB free)\n"
+    "  Vulkan1: NVIDIA GeForce RTX 5090 (32607 MiB, 31641 MiB free)\n"
+    "  Vulkan2: Radeon 8060S Graphics (RADV GFX1151) (114164 MiB, 113573 MiB free)\n"
 )
 
 
@@ -476,9 +485,21 @@ def test_list_devices_parses_nested_parens_in_name(monkeypatch):
     monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: _LIST_DEVICES_VULKAN)
     devs = envinfo.list_devices("/x/llama-server")
     assert [d["id"] for d in devs] == ["Vulkan0", "Vulkan1", "Vulkan2"]
+    # 見出し行 "Available devices:" はデバイスとして拾わない
+    assert len(devs) == 3
     # 名前中の括弧を巻き込まず、行末のメモリ括弧だけを切り出す
-    assert devs[2]["name"] == "AMD Radeon Graphics (RADV GFX1151)"
+    assert devs[2]["name"] == "Radeon 8060S Graphics (RADV GFX1151)"
     assert devs[2]["vram_total_gb"] == 111.5
+    assert devs[2]["vram_free_gb"] == 110.9
+
+
+def test_same_gpu_has_different_id_per_build(monkeypatch):
+    """RTX 3090 は CUDA1 だが Vulkan0。ビルドを跨いで番号を流用できない."""
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: _LIST_DEVICES_CUDA)
+    cuda = envinfo.resolve_device("CUDA1", [], binary="/x")["device_name"]
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: _LIST_DEVICES_VULKAN)
+    vulkan = envinfo.resolve_device("Vulkan0", [], binary="/x")["device_name"]
+    assert cuda == vulkan == "NVIDIA GeForce RTX 3090"
 
 
 @pytest.mark.parametrize("dev,expected", [
@@ -509,10 +530,11 @@ def test_rocm_and_vulkan_resolve_through_the_same_path(monkeypatch):
     """ROCm / Vulkan も --list-devices で解決する (バックエンド分岐なし)."""
     monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: _LIST_DEVICES_VULKAN)
     r = envinfo.resolve_device("Vulkan2", [], binary="/x/llama-server")
-    assert r["device_name"] == "AMD Radeon Graphics (RADV GFX1151)"
-    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: (
-        "  ROCm0: AMD Radeon 8060S Graphics (98304 MiB, 25600 MiB free)\n"))
+    assert r["device_name"] == "Radeon 8060S Graphics (RADV GFX1151)"
+    assert r["device_name_source"] == "--list-devices"
+    monkeypatch.setattr(envinfo, "_sh", lambda *a, **k: _LIST_DEVICES_ROCM)
     r = envinfo.resolve_device("ROCm0", [], binary="/x/llama-server")
+    # 同じ物理GPUでもビルドによって表記が違う (ROCm は "AMD " が付く)
     assert r["device_name"] == "AMD Radeon 8060S Graphics"
 
 
