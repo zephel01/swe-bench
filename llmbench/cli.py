@@ -176,6 +176,7 @@ def cmd_run(args) -> int:
             runs=args.runs, sample_temp=args.sample_temp,
             label=args.label, concurrency=args.concurrency,
             client_type=args.client_type, base_url=args.base_url,
+            generate_retries=args.generate_retries,
         )
     except ValueError as e:  # モデル解決失敗などは見やすく表示
         print(f"❌ {e}", file=sys.stderr)
@@ -329,6 +330,11 @@ def main() -> None:
     )
     p_run.add_argument("--label", default=None,
                        help="結果ラベルを明示指定 (既定: model:auto時はサーバ検出名)")
+    p_run.add_argument(
+        "--generate-retries", type=int, default=None, dest="generate_retries",
+        help="パース失敗時の再生成回数 (既定: run.generate_retries または1)。"
+             "runs>1 は試行自体が冗長なので、生成が高価なモデルでは 0 推奨",
+    )
     p_run.add_argument(
         "--concurrency", type=int, default=None,
         help="試行(runs)を同時実行する並列数 (既定: run.concurrency または1)。"

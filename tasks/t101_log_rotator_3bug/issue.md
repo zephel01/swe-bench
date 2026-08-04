@@ -27,6 +27,12 @@ coming in from different teams:
    The dashboard that pages through history therefore lands on the
    wrong "newest" entry.
 
+   `naming.generation_key()` must keep its existing contract of
+   returning a `str` (callers feed it straight to `sorted(key=...)`
+   alongside other string keys), so the fix has to make that string
+   compare numerically — i.e. a fixed-width, zero-padded key whose
+   length does not change with the generation number.
+
 A smoke test that does a single write followed by a single rotation
 using only single-digit generations does not reproduce any of the three
 symptoms.

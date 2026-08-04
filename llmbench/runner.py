@@ -288,6 +288,7 @@ class BenchmarkRunner:
         concurrency: int | None = None,
         client_type: str | None = None,
         base_url: str | None = None,
+        generate_retries: int | None = None,
     ) -> RunResult:
         model_cfg = self.resolve_model(
             model_name, client_type=client_type, base_url=base_url
@@ -297,7 +298,13 @@ class BenchmarkRunner:
         judge, judge_seeds = self._make_judge()
         lang = self.run_cfg.get("issue_lang", "en")
         timeout = int(self.run_cfg.get("test_timeout", 120))
-        retries = int(self.run_cfg.get("generate_retries", 1))
+        # パース失敗時の再生成回数。runs>1 では試行そのものが冗長性を持つので、
+        # 生成が高価なモデル(思考モデル)では 0 にして時間を節約できる。
+        retries = int(
+            generate_retries if generate_retries is not None
+            else self.run_cfg.get("generate_retries", 1)
+        )
+        retries = max(0, retries)
         runs = int(runs if runs is not None else self.run_cfg.get("runs", 1))
         runs = max(1, runs)
         self._concurrency = max(1, int(
@@ -373,9 +380,16 @@ class BenchmarkRunner:
         gen = None
         ev = None
         for _ in range(retries + 1):
+            t_gen = time.monotonic()
             try:
                 gen = client.generate(system, user_prompt)
             except Exception as e:  # 生成失敗はその試行を失敗扱い
+                # 失敗時も経過時間を残す。ここを 0.0 のままにしていたため
+                # 600秒待った Read timeout がログ上 "(0.0s)" と表示され、
+                # 「即死」に見えて原因の切り分けを妨げていた。
+                at.latency_sec = round(
+                    total_latency + (time.monotonic() - t_gen), 2
+                )
                 at.fail_reason = f"generation error: {e}"
                 return at
             total_latency += gen.latency_sec

@@ -26,4 +26,7 @@
 - `migrate_legacy({"name": "Alice Wonder"})` returns
   `{"first_name": "Alice", "last_name": "Wonder"}`.
 - Single-word legacy names split to `first_name=<name>, last_name=""`.
-- Records already in the new schema pass through `migrate_legacy` unchanged.
+- Records already in the new schema pass through `migrate_legacy`
+  unchanged in content, but the returned dict must be a **shallow copy** —
+  `migrate_legacy` must never hand back the caller's own dict object, so
+  batch migrators can mutate the result without touching their input.

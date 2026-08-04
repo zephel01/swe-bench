@@ -39,12 +39,28 @@ models:
   qwen-coding:
     type: openai
     base_url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
-    model: "qwen3.6-flash"   # 非思考コーダー(推奨)。qwen3.7-max等の思考モデルはstream必須でllmbench非対応
-    api_key: "${DASHSCOPE_CODING_API_KEY}" 
+    # ⚠️ qwen3.8-max は「思考(thinking)モデル」。reasoning_effort の既定が xhigh で、
+    #    非思考の qwen3.6-flash に比べ completion_tokens が 3〜25倍に増える
+    #    (実測 L7: t064 = 627tok → 16,243tok)。以下の値はそれを前提にしている。
+    #    非思考モデル(qwen3.6-flash 等)に戻すなら max_tokens/timeout も戻してよい。
+    model: "qwen3.8-max"             # 思考モデル。max output 131,072 / thinking既定 xhigh
+    api_key: "${DASHSCOPE_CODING_API_KEY}"
     temperature: 0.2
-    max_tokens: 24576                # reasoning出力に備え大きめ
-    timeout: 600
-    transient_retries: 0
+    # 24576 では L7 の重いタスク(t093/t095)が上限に張り付いて打ち切られる。
+    # qwen3.8-max の max output は 131,072 なので 65536 でも仕様内。
+    max_tokens: 65536
+    # 生成時間 ≒ max_tokens ÷ スループット(実測 43〜53 tok/s) → 65536 なら最大約1,500秒。
+    # ストリーミング時は「チャンク間隔」への制限になるが、余裕を持って 2400 にしておく。
+    timeout: 2400
+    # ストリーミング必須。非ストリームだと ①read timeout が生成全体の制限として効き
+    # ②数分〜数十分の無通信接続をゲートウェイが切る (ConnectionResetError(54))。
+    stream: true
+    # 0 だと通信の単発失敗がそのままタスク失敗になる (実測: t076/t050 が1回のresetで死亡)
+    transient_retries: 2
+    transient_backoff: 5
+    # 実行時間を短縮したい場合のみ有効化 (トークン量が大きく減る)。
+    # ただし xhigh 既定の素の性能を測らないことになるので比較時に注釈が要る。
+    # reasoning_effort: "medium"     # low | medium | xhigh (既定 xhigh)
 
   # ── z.ai GLM Coding Plan ────────────────────────────────────────
   glm-coding:
@@ -141,15 +157,26 @@ models:
 run:
   issue_lang: en          # en | ja  (language tax検証はjaに切替えて再実行)
   test_timeout: 120       # pytest実行のタイムアウト(秒/タスク)
-  generate_retries: 1     # パース失敗時の再生成回数
+  generate_retries: 1     # パース失敗時の再生成回数 (--generate-retries で上書き可)
+                          #   runs>1 は試行そのものが冗長性を持つので、生成が高価な
+                          #   思考モデルでは --generate-retries 0 で時間を節約できる
+                          #   (弱いローカルモデルは 1 のままの方が公平なので既定は据え置き)
   workdir: null           # 一時作業ディレクトリ (null = システムtemp配下)
   runs: 1                 # 各タスクの試行回数 (>1 で成功率を計測。pass@k は下の pass_k 参照)
   pass_k: null            # pass@k の k。null = runs と同値 (このとき pass@k は
                           #   「1回でも成功したか」の0/1に退化し solved_any_rate と同義)。
                           #   k < runs にすると「k回試して1回でも成功する確率」の
                           #   不偏推定として意味を持つ (例: runs: 5, pass_k: 2)
-  sample_temp: 0.8        # 複数試行(runs>1)時のサンプリング温度
-  concurrency: 1          # 試行(runs)の同時実行数。llama.cpp を --parallel N -cb で起動時に >1 で総時間短縮(既定1=直列)
+  sample_temp: 0.35       # 複数試行(runs>1)時のサンプリング温度
+                          #   ⚠️ runs>1 にすると各モデルの temperature がこの値に
+                          #   差し替わる (runner.run)。旧既定の 0.8 は、普段 0.2 で
+                          #   運用しているモデルを別物の設定で測ることになり、
+                          #   思考モデルでは推論が発散してトークン量・実行時間も膨らむ。
+                          #   pass@k に必要な多様性は確保しつつ実運用に近い 0.35 にする。
+  concurrency: 1          # 試行(runs)の同時実行数 (既定1=直列)。
+                          #   ローカル(llama.cpp)は --parallel N -cb で起動したときだけ >1 が有効。
+                          #   クラウドAPIは --concurrency 3 のようにCLIで都度指定する
+                          #   (429 はクライアント側で retry するが、枠は消費する)
   # ollama_host: "http://localhost:11434"  # Ollama接続先 (config未定義モデルの自動解決に使用)
 
 quality:

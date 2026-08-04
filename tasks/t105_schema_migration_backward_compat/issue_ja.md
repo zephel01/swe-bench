@@ -26,4 +26,7 @@
 - `migrate_legacy({"name": "Alice Wonder"})` は
   `{"first_name": "Alice", "last_name": "Wonder"}` を返す。
 - 単語 1 個の旧 name は `first_name=<name>, last_name=""` に分ける。
-- 既に新スキーマのレコードは `migrate_legacy` を通しても不変。
+- 既に新スキーマのレコードは `migrate_legacy` を通しても内容は不変。ただし
+  返す dict は **shallow copy** とし、呼び出し元が渡した dict オブジェクトを
+  そのまま返してはならない（バッチ移行側が戻り値を書き換えても入力に影響
+  しないようにするため）。

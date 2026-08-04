@@ -16,5 +16,8 @@ Requirements:
   `LegacySearchDeprecated` subclass so we can track migration progress.
 - `SearchRequest`, `search`, and `LegacySearchDeprecated` must all be
   exported from the package's `__all__`.
+- The two calling conventions must not be mixed: passing `filters`
+  alongside a `SearchRequest` (e.g. `search(req, {"category": "book"})`)
+  must raise `TypeError`, since the filters belong inside the request.
 
 Please extend the code so the tests in `tests/` all pass.

@@ -15,5 +15,8 @@
   ようにすること。
 - `SearchRequest`, `search`, `LegacySearchDeprecated` はパッケージから
   公開（`__all__`）すること。
+- 2つの呼び出し形式を混ぜることは禁止する。`SearchRequest` と `filters` を
+  同時に渡した場合（例: `search(req, {"category": "book"})`）は `TypeError`
+  を送出すること。filters はリクエスト側に入れるのが正しい。
 
 `tests/` 配下のテストが全て通るようにコードを拡張してください。
