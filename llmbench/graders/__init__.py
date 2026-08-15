@@ -38,6 +38,9 @@ class GraderEval:
     quality_score: float = 0.0
     parse_ok: bool = False
     parse_error: str = ""
+    # 抽出はできたが疑わしい点 (プレースホルダのパスを捨てた等)。
+    # parse_ok=True でも非空になりうる → runner の再生成ゲートが参照する。
+    parse_warnings: list = field(default_factory=list)
     parsed_files: dict = field(default_factory=dict)   # artifacts 保存物
     fail_reason: str = ""
     components: dict = field(default_factory=dict)      # 採点内訳 (レポート表示)

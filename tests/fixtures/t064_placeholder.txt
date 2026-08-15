@@ -1,0 +1,67 @@
+--- FILE: allocate.py ---
+```python
+<content>
+```
+No extra text. Need final only.
+
+Need choose final implementation. Let's weigh minimal vs robust.
+
+The current file has no imports. If I add `import math`, okay. If I use integer arithmetic, no imports. But potential float weights. The issue doesn't specify weights type. In Python, weights could be list of ints. The function uses `sum(weights)` and multiplication, division. It could accept floats. A robust fix should not break floats. Using `math.floor` handles both. But floating precision maybe less exact. Could use `Fraction` exact but import. Which is more idiomatic? For money allocation, integer weights likely. But to be safe with floats, maybe use `math.floor` and fractional parts. Let's test float cases:
+```
+import math
+def allocate(total_cents, weights):
+    total_weight = sum(weights)
+    if total_weight == 0: return [0]*len(weights)
+    exact = [total_cents * w / total_weight for w in weights]
+    result = [math.floor(x) for x in exact]
+    remainder = total_cents - sum(result)
+    if remainder:
+        fracs = [x - result[i] for i,x in enumerate(exact)]
+        for i in sorted(range(len(weights)), key=fracs.__getitem__, reverse=True)[:remainder]:
+            result[i] += 1
+    return result
+```
+For integer weights, exact uses float division. Could floor be wrong due to floating rounding when exact is integer but represented slightly below? Example total_cents=10, weights=[1,1], exact=5.0 exactly. For many integers, division by sum may produce repeating not integer. If exact integer, e.g. total=100, weights=[1,1,1,1,1,1,1,1,1,1]? 10 exactly. Float 10.0. If total large and divisible, e.g. total=10**16, weights [1,1], 5e15 exactly? Double can represent multiples of 1 up to 2^53 ~9e15, 5e15 exact. 10**16/2=5e15 exact? 5e15 < 2^53? 2^53=9.007e15, yes exact. 10**17/2=5e16 not exact but floor maybe 5e16? It may round to 5e16 exactly? Could be. But cents likely not that huge.
+
+Could avoid float for ints by checking `isinstance(total_weight, int)`? But weights may be list of ints, sum int. Use integer path. For floats, use math. This gives robustness and exactness. But more code. Is it minimal? Maybe acceptable.
+
+Simpler hybrid:
+```
+def allocate(total_cents, weights):
+    total_weight = sum(weights)
+    if total_weight == 0:
+        return [0] * len(weights)
+
+    if all(isinstance(w, int) for w in weights) and isinstance(total_weight, int):
+        result = [total_cents * w // total_weight for w in weights]
+        remainder = total_cents - sum(result)
+        if remainder:
+            order = sorted(range(len(weights)), key=lambda i: (total_cents * weights[i]) % total_weight, reverse=True)
+            for i in order[:remainder]:
+                result[i] += 1
+        return result
+
+    import math
+    exact = [total_cents * w / total_weight for w in weights]
+    result = [math.floor(x) for x in exact]
+    remainder = total_cents - sum(result)
+    if remainder:
+        fracs = [x - result[i] for i, x in enumerate(exact)]
+        for i in sorted(range(len(weights)), key=fracs.__getitem__, reverse=True)[:remainder]:
+            result[i] += 1
+    return result
+```
+But `all(isinstance(w, int) for w in weights)` fails for bool? bool is int, okay. Fails for numpy int. Could use `numbers.Integral` but import. Overkill.
+
+Maybe just use `Fraction` to handle all numeric exactly and simple. Let's examine potential performance and compatibility. `Fraction` can construct from int, float, Decimal, string? It can from float. If weights are `Decimal`, Fraction(Decimal) works. If weights are `fractions.Fraction`, works. If weights are custom numeric, maybe not. But likely fine.
+
+Code with Fraction:
+```
+from fractions import Fraction
+
+def allocate(total_cents, weights):
+    total_weight = sum(Fraction(w) for w in weights)
+    if total_weight == 0:
+        return [0] * len(weights)
+
+    exact = [Fraction(total_cents) * Fraction(w) / total_weight for w in weights]

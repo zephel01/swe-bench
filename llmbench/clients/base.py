@@ -43,13 +43,24 @@ def require_cfg(cfg: dict, key: str, name: str, hint: str = ""):
 
 @dataclass
 class GenerationResult:
-    """1回の生成結果. 速度メトリクス込み."""
+    """1回の生成結果. 速度メトリクス込み.
+
+    ``finish_reason`` / ``truncated`` / ``max_tokens`` は既定値付きの追加
+    フィールド (後方互換)。打ち切り (max_tokens 到達) は「抽出できたコードが
+    信頼できない」ことを意味するので、results.json まで伝播させる。
+    """
 
     text: str
     latency_sec: float = 0.0
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     raw: dict = field(default_factory=dict)
+    # サーバが返した終了理由 (stop / length / tool_calls / ...)
+    finish_reason: str | None = None
+    # finish_reason == "length"、または completion_tokens が max_tokens 到達
+    truncated: bool = False
+    # この生成に使った max_tokens (打ち切り判定の根拠として残す)
+    max_tokens: int | None = None
 
     @property
     def tokens_per_sec(self) -> float | None:

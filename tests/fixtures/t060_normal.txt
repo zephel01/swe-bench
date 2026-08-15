@@ -1,0 +1,11 @@
+--- FILE: ueq.py ---
+```python
+import unicodedata
+
+def equal(a, b, fold=False):
+    a = unicodedata.normalize("NFC", a)
+    b = unicodedata.normalize("NFC", b)
+    if fold:
+        return a.casefold() == b.casefold()
+    return a == b
+```
