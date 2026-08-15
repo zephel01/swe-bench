@@ -27,6 +27,8 @@ class CodeGrader(Grader):
         patch = parse_llm_output(raw_output, task.files)
         ev.parse_ok = patch.parse_ok
         ev.parse_error = patch.error
+        # 一部パス拒否などの「抽出は通ったが疑わしい」情報を runner まで運ぶ
+        ev.parse_warnings = list(getattr(patch, "warnings", []))
         ev.parsed_files = dict(patch.files)
 
         func, ws = evaluate_functional(

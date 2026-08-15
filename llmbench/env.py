@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -32,10 +33,12 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 __all__ = [
     "EXEC_LABEL", "collect", "collect_host", "collect_backend",
     "collect_gpu_usage", "detect_runtime", "find_server_pid", "format_summary",
+    "model_file_info", "sampler_defaults",
 ]
 
 # execution の人間向けラベル (report / compare 共通)
@@ -432,6 +435,15 @@ _ARG_VALUE_KEYS = {
     "-ub": "ubatch_size", "--ubatch-size": "ubatch_size",
     "--spec-type": "spec_type",
     "-md": "draft_model", "--model-draft": "draft_model",
+    # サンプリング設定。tok/s ではなく**結果の再現性**を左右する。
+    # 特に --seed 未指定の llama-server は seed=-1 (毎回ランダム) で動くので、
+    # 「同じ条件で測った」と言うにはここが記録されている必要がある。
+    "--temp": "temp", "--temperature": "temp",
+    "--top-p": "top_p", "--top-k": "top_k", "--min-p": "min_p",
+    "--seed": "seed",
+    # KVキャッシュ量子化。品質にも速度にも効くのに /props からは取れない。
+    "-ctk": "cache_type_k", "--cache-type-k": "cache_type_k",
+    "-ctv": "cache_type_v", "--cache-type-v": "cache_type_v",
 }
 _ARG_FLAGS = {
     "--mlock": "mlock", "--no-mmap": "no_mmap",
@@ -439,7 +451,7 @@ _ARG_FLAGS = {
     "-cb": "cont_batching", "--cont-batching": "cont_batching",
 }
 _INT_ARGS = ("n_gpu_layers", "n_ctx", "threads", "parallel", "main_gpu",
-             "batch_size", "ubatch_size")
+             "batch_size", "ubatch_size", "top_k", "seed")
 # 起動引数に混ざりうる秘匿値 (results.json は共有されうるので必ず伏せる)
 _SECRET_ARGS = ("key", "token", "secret", "password", "passwd")
 # 可視デバイスを絞る環境変数 (--device と併用されると実際の割当がずれる)
@@ -808,6 +820,85 @@ def _backend_ollama(base_url: str, model: str | None) -> dict:
     return b
 
 
+# ── モデルファイルの指紋 / サンプラ既定値 ─────────────────────────────
+
+# 全体ハッシュは 20GB クラスの gguf では現実的でない (数十秒〜分)。
+# 先頭と末尾を 1MB ずつ読めば、量子化やり直し・再ダウンロード・別ビルドの
+# 取り違えはほぼ確実に検出できる (ヘッダとテンソル末尾が変わるため)。
+_FINGERPRINT_CHUNK = 1024 * 1024
+
+_SAMPLER_KEYS = (
+    "temperature", "temp", "top_p", "top_k", "min_p", "typical_p",
+    "seed", "repeat_penalty", "presence_penalty", "frequency_penalty",
+    "dynatemp_range", "dynatemp_exponent", "mirostat", "n_predict",
+)
+
+
+def model_file_info(path) -> dict | None:
+    """モデルファイルの識別情報 (サイズ / 更新時刻 / 先頭・末尾ハッシュ).
+
+    「同じファイル名で中身を差し替えた」ケースを後から見分けるために残す。
+    読めないとき (リモート実行・権限なし・ファイル削除済み) は例外を出さず、
+    値を None で埋めた dict を返す (パスだけでも記録に価値があるため)。
+    """
+    if not path:
+        return None
+    info: dict = {
+        "path": str(path),
+        "size_bytes": None,
+        "mtime": None,
+        "sha256_head_tail": None,
+    }
+    try:
+        st = os.stat(path)
+        info["size_bytes"] = st.st_size
+        info["mtime"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%S", time.localtime(st.st_mtime)
+        )
+    except OSError:
+        return info
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            h.update(f.read(_FINGERPRINT_CHUNK))
+            if st.st_size > _FINGERPRINT_CHUNK:
+                f.seek(max(0, st.st_size - _FINGERPRINT_CHUNK))
+                h.update(f.read(_FINGERPRINT_CHUNK))
+        # 何バイトを対象にしたかも残す (再計算時に同じ手順を踏めるように)
+        info["sha256_head_tail"] = h.hexdigest()
+        info["fingerprint_chunk_bytes"] = _FINGERPRINT_CHUNK
+    except OSError:
+        info["sha256_head_tail"] = None
+    return info
+
+
+def sampler_defaults(props: dict | None) -> dict:
+    """llama.cpp ``/props`` の default_generation_settings からサンプラ既定値を拾う.
+
+    llama.cpp のバージョンによって値が
+    ``default_generation_settings`` 直下にある場合と、その中の ``params``
+    にある場合があるので両方見る。取れなければ空 dict。
+    """
+    if not isinstance(props, dict):
+        return {}
+    gen = props.get("default_generation_settings") or {}
+    if not isinstance(gen, dict):
+        return {}
+    sources = [gen]
+    params = gen.get("params")
+    if isinstance(params, dict):
+        sources.append(params)
+    out: dict = {}
+    for src in sources:
+        for key in _SAMPLER_KEYS:
+            if key in src and src[key] is not None:
+                out[key] = src[key]
+    # temp / temperature の表記ゆれは temperature に寄せる
+    if "temp" in out:
+        out.setdefault("temperature", out.pop("temp"))
+    return out
+
+
 def _backend_openai(base_url: str, model: str | None) -> dict:
     """OpenAI互換サーバ. ローカル (llama.cpp / LM Studio 等) なら /props も見る."""
     local = _is_local_url(base_url)
@@ -834,6 +925,12 @@ def _backend_openai(base_url: str, model: str | None) -> dict:
     slots = _int(props.get("total_slots"))
     if slots:
         b["parallel_slots"] = slots
+    # サンプラ既定値 (temperature / top_p / top_k / min_p / seed …)。
+    # クライアントが送らなかったパラメータは**この既定値で生成されている**。
+    # 従来は n_ctx しか読んでおらず、「何で測ったのか」が残っていなかった。
+    defaults = sampler_defaults(props)
+    if defaults:
+        b["sampler_defaults"] = defaults
     path = props.get("model_path") or gen.get("model") or props.get("model_path")
     if path:
         b["model_path"] = str(path)
@@ -841,6 +938,10 @@ def _backend_openai(base_url: str, model: str | None) -> dict:
         m = re.search(r"(IQ\d[A-Z_]*|Q\d[A-Z0-9_]*|F16|BF16|F32)", str(path))
         if m:
             b["quantization"] = m.group(1)
+        # 同名ファイルを差し替えて再測定する運用に備えて指紋を残す
+        info = model_file_info(path)
+        if info:
+            b["model_file"] = info
     for key in ("build_info", "chat_template_name"):
         if props.get(key):
             b[key] = props[key]

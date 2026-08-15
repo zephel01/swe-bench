@@ -1,0 +1,37 @@
+--- FILE: canonpath.py ---
+```python
+import os
+import unicodedata
+import urllib.parse
+
+
+def resolve_subpath(base, user_path):
+    if not isinstance(base, str) or not isinstance(user_path, str):
+        return None
+
+    if "\x00" in base or "\x00" in user_path:
+        return None
+
+    decoded = user_path
+    for _ in range(10):
+        decoded = urllib.parse.unquote(decoded)
+        if decoded == user_path? Wait need compare to previous. Use previous.
+
+    decoded = user_path
+    for _ in range(10):
+        new_decoded = urllib.parse.unquote(decoded)
+        if new_decoded == decoded:
+            break
+        decoded = new_decoded
+
+    decoded = unicodedata.normalize("NFKC", decoded)
+
+Now, consider if user_path = '%EF%BC%8E%EF%BC%8E%EF%BC%8F' (fullwidth encoded). unquote -> fullwidth, NFKC -> traversal. Good.
+
+Now, consider if user_path = '%25EF%BC%8E%25EF%BC%8E%25EF%BC%8F' double encoded fullwidth. loop: first -> %EF... (percent hex), second -> fullwidth, third stable, NFKC -> traversal. Good.
+
+Now, consider if user_path = '．．%2Fetc%2Fpasswd' (fullwidth dots, encoded slash). unquote -> '．．/etc/passwd', NFKC -> '../etc/passwd', reject. Good.
+
+Now, consider if user_path = '．．／etc/passwd' no percent. NFKC -> traversal. Good.
+
+```

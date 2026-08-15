@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import env as envinfo
 from . import usability
-from .clients import LLMClient, create_client
+from .clients import LLMClient, create_client, sampling_of
 from .clients.mock import MockClient
 from .clients.ollama import (
     DEFAULT_OLLAMA_HOST,  # noqa: F401  (後方互換のため残置)
@@ -49,6 +49,11 @@ class Attempt:
     raw_output: str = ""
     test_output: str = ""
     quality_components: dict = field(default_factory=dict)
+    # 打ち切り (max_tokens 到達 / finish_reason=length)。
+    # 「解けなかった」のか「言い終わる前に切られた」のかは別問題なので分けて残す。
+    truncated: bool = False
+    finish_reason: str = ""
+    max_tokens: int | None = None
 
 
 @dataclass
@@ -74,6 +79,12 @@ class TaskResult:
     pass_at_k: float = 0.0
     pass_k: int = 1                    # pass_at_k の実際の k (既定は runs と同値)
     attempts: list = field(default_factory=list)   # 各試行の要約 (軽量)
+
+    # --- 打ち切り ---
+    truncated: bool = False          # いずれかの試行が max_tokens で切られた
+    n_truncated: int = 0             # 打ち切られた試行数
+    finish_reason: str = ""          # 代表試行の終了理由
+    max_tokens: int | None = None    # 生成に使った max_tokens
 
     # --- usability判定 ---
     usability_tier: str = ""
@@ -293,7 +304,10 @@ class BenchmarkRunner:
         model_cfg = self.resolve_model(
             model_name, client_type=client_type, base_url=base_url
         )
-        client = create_client(model_name, model_cfg)
+        # run.sampling があれば全モデル共通の既定として渡す (無ければ従来動作)
+        client = create_client(
+            model_name, model_cfg, defaults=self.run_cfg.get("sampling")
+        )
         reviewer = self._make_reviewer()
         judge, judge_seeds = self._make_judge()
         lang = self.run_cfg.get("issue_lang", "en")
@@ -359,6 +373,10 @@ class BenchmarkRunner:
         run.environment = envinfo.collect(
             model_cfg, served_model=run.served_model or None
         )
+        # サンプリング設定は「同じ条件で測ったか」の核。runs>1 では上で
+        # client.temperature を実行時に上書きしているので、**上書き後の実効値**
+        # を記録する (config の値ではない)。
+        run.environment["sampling"] = sampling_of(client)
         summary = envinfo.format_summary(run.environment)
         if summary:
             progress(f"実行環境   : {summary}")
@@ -379,6 +397,9 @@ class BenchmarkRunner:
         total_latency = 0.0
         gen = None
         ev = None
+        # 再生成ゲート: parse_ok だけでは足りない。「一部のパスがプレースホルダ
+        # だったので捨てた」ようなケースは parse_ok=True でも中身が疑わしいので、
+        # grader が警告を返したときも作り直す。ループは必ず retries+1 回で抜ける。
         for _ in range(retries + 1):
             t_gen = time.monotonic()
             try:
@@ -394,7 +415,7 @@ class BenchmarkRunner:
                 return at
             total_latency += gen.latency_sec
             ev = grader.evaluate(task, gen.text, ctx)
-            if ev.parse_ok:
+            if ev.parse_ok and not _extraction_suspect(ev):
                 break
         at.latency_sec = round(total_latency, 2)
         if gen is not None:
@@ -403,6 +424,10 @@ class BenchmarkRunner:
             )
             at.completion_tokens = gen.completion_tokens
             at.raw_output = gen.text
+            # 古いクライアント実装 (追加フィールドを持たない) でも壊れないよう getattr
+            at.truncated = bool(getattr(gen, "truncated", False))
+            at.finish_reason = getattr(gen, "finish_reason", None) or ""
+            at.max_tokens = getattr(gen, "max_tokens", None)
         if ev is not None:
             at.resolved = ev.resolved
             at.quality_score = ev.quality_score
@@ -468,6 +493,17 @@ class BenchmarkRunner:
         return tr
 
 
+def _extraction_suspect(ev) -> bool:
+    """抽出はできたが鵜呑みにできない (= 再生成する価値がある) か.
+
+    ``GraderEval.parse_warnings`` は patch 側の warnings (プレースホルダの
+    パスを捨てた等)。持たない grader でも壊れないよう getattr で読む。
+    """
+    return bool(
+        getattr(ev, "parse_warnings", None) or getattr(ev, "parse_error", "")
+    )
+
+
 def _aggregate_attempts(
     tr: TaskResult, attempts: list[Attempt], scoring_cfg: dict, k: int | None = None
 ) -> None:
@@ -502,6 +538,12 @@ def _aggregate_attempts(
     toks = [a.completion_tokens for a in attempts if a.completion_tokens]
     tr.completion_tokens = round(sum(toks) / len(toks)) if toks else None
 
+    # 打ち切り: 1試行でも切られていれば「このタスクは上限に当たっている」
+    tr.n_truncated = sum(1 for a in attempts if a.truncated)
+    tr.truncated = tr.n_truncated > 0
+    mt = [a.max_tokens for a in attempts if a.max_tokens]
+    tr.max_tokens = mt[0] if mt else None
+
     # 失敗理由
     if c == n:
         tr.fail_reason = ""
@@ -518,6 +560,7 @@ def _aggregate_attempts(
     tr.raw_output = rep.raw_output
     tr.test_output = rep.test_output
     tr.quality_components = rep.quality_components
+    tr.finish_reason = rep.finish_reason
 
     # 試行ごとの軽量サマリ (JSONに残す)
     tr.attempts = [
@@ -526,6 +569,8 @@ def _aggregate_attempts(
             "quality": round(a.quality_score, 1),
             "combined": a.combined,
             "fail_reason": a.fail_reason,
+            "truncated": a.truncated,
+            "finish_reason": a.finish_reason,
         }
         for a in attempts
     ]
@@ -662,6 +707,10 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
         "avg_combined": round(run.avg_combined, 1),
         "n_tasks": len(run.results),
         "runs": run.runs,
+        # max_tokens で打ち切られたタスク数。0 でないランは「解けなかった」の
+        # 内訳に「言い終わる前に切られた」が混ざっているので、スコアだけを見て
+        # モデルの実力と読んではいけない。
+        "n_truncated": sum(1 for r in run.results if r.truncated),
         "usability": {t: overall.get(t, 0) for t in usability.TIERS},
     }
     # 速度指標も summary に置く。従来はタスク単位 (results[]) にしか無く、

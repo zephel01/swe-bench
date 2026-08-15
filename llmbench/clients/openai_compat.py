@@ -43,6 +43,20 @@ class RetryableHTTPError(RuntimeError):
         self.retry_after = retry_after
 
 
+def _opt(value, cast):
+    """未指定 (None/空文字) なら None、それ以外は cast した値を返す.
+
+    「送らない」と「0 を送る」は別物 (top_k=0 は無効化の意味を持つ) なので、
+    0 や 0.0 をうっかり None に潰さないよう明示的に None だけを弾く。
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_retry_after(value: str | None) -> float | None:
     """Retry-After ヘッダ (秒数形式) を float で返す. 不正値は None."""
     if not value:
@@ -110,6 +124,14 @@ class OpenAICompatClient(LLMClient):
         # HTTP 4xx/5xx はここでは retry しない (呼び出し側で扱う)。
         self.transient_retries = int(cfg.get("transient_retries", 2))
         self.transient_backoff = float(cfg.get("transient_backoff", 2.0))
+        # サンプリング設定。**送っていなかったものは効いていない**:
+        # llama-server の既定は seed=-1 (毎回ランダム) なので、seed を送らない
+        # 限り「同じ条件で測った」とは言えない。None のものは payload に載せず
+        # サーバ既定に従う (従来動作と同一)。
+        self.top_p = _opt(cfg.get("top_p"), float)
+        self.top_k = _opt(cfg.get("top_k"), int)
+        self.min_p = _opt(cfg.get("min_p"), float)
+        self.seed = _opt(cfg.get("seed"), int)
         # ストリーミング (stream: true)。長時間生成では実質必須。
         #   非ストリームだと生成が終わるまで1バイトも流れてこないため、
         #     (1) requests の read timeout が「生成全体の制限時間」として効く
@@ -154,6 +176,13 @@ class OpenAICompatClient(LLMClient):
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
+        # None でないものだけ送る (未指定はサーバ既定に従う = 従来動作)
+        for key, value in (
+            ("top_p", self.top_p), ("top_k", self.top_k),
+            ("min_p", self.min_p), ("seed", self.seed),
+        ):
+            if value is not None:
+                payload[key] = value
         if self.reasoning_effort:
             payload["reasoning_effort"] = self.reasoning_effort
         if self.stream:
@@ -207,9 +236,14 @@ class OpenAICompatClient(LLMClient):
         """content/reasoning/usage から GenerationResult を組み立てる (共通処理)."""
         completion_tokens = usage.get("completion_tokens")
         text = content
-        if finish_reason == "length" and content.strip():
-            # 出力自体はあるが max_tokens で打ち切られている。
-            # パッチが途中で切れて parse 失敗する原因になるので必ず知らせる。
+        # 打ち切り判定: finish_reason=length か、completion_tokens が
+        # max_tokens に到達しているか。どちらも「続きがあったのに切られた」印。
+        truncated = bool(finish_reason == "length") or bool(
+            completion_tokens and completion_tokens >= self.max_tokens
+        )
+        if finish_reason == "length":
+            # 旧実装は `and content.strip()` を条件に付けていたため、
+            # **content が空＝最も危険な場面でこの警告が出なかった**。条件を外す。
             print(
                 f"⚠️ {self.name}: finish_reason=length — max_tokens="
                 f"{self.max_tokens} で出力が打ち切られています "
@@ -224,9 +258,16 @@ class OpenAICompatClient(LLMClient):
             # 答えがreasoning側に紛れ込んでいる場合があるのでフォールバックで拾う。
             if reasoning.strip():
                 text = reasoning
+                # content が空のまま返るのは「</think> を閉じる前に生成が
+                # 終わった」= 思考が予算内に完了していない状態なので、
+                # フォールバックで拾えても打ち切り扱いにする。
+                truncated = True
                 print(
                     f"⚠️ {self.name}: content が空。reasoning_content "
-                    f"({len(reasoning)}文字) にフォールバックしてパースを試みます",
+                    f"({len(reasoning)}文字) にフォールバックしてパースを試みます"
+                    f" — 思考が予算内に完了しておらず (max_tokens={self.max_tokens}, "
+                    f"completion_tokens={completion_tokens})、"
+                    "ここから抽出したコードは信頼できない可能性があります",
                     file=sys.stderr,
                 )
             elif completion_tokens and completion_tokens >= self.max_tokens:
@@ -252,6 +293,9 @@ class OpenAICompatClient(LLMClient):
             text=text,
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=completion_tokens,
+            finish_reason=finish_reason,
+            truncated=truncated,
+            max_tokens=self.max_tokens,
             raw=raw,
         )
 

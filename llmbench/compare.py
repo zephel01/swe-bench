@@ -76,20 +76,61 @@ def _compute_label(env: dict) -> str:
 
 
 def _bench_conditions(env: dict) -> dict:
-    """tok/s の比較可否を左右する推論条件 (ここが揃って初めて比較が成立する)."""
+    """比較可否を左右する条件 (ここが揃って初めて比較が成立する).
+
+    量子化ラベルが同じでも **別の gguf** (再量子化・別作者・UD版) なら
+    まったく別のモデルなので、モデルファイル名と指紋、さらに投機デコード・
+    KVキャッシュ量子化・ビルドまで条件に含める。
+    """
     backend = env.get("backend") or {}
     launch = backend.get("launch") or {}
+    mf = backend.get("model_file") or {}
+    model_path = backend.get("model_path") or mf.get("path")
+    fingerprint = mf.get("sha256_head_tail")
     return {
         "量子化": backend.get("quantization"),
+        "モデル": Path(str(model_path)).name if model_path else None,
+        "指紋": fingerprint[:12] if fingerprint else None,
         "-ngl": launch.get("n_gpu_layers"),
         "n_ctx": launch.get("n_ctx") or backend.get("n_ctx"),
         "並列": launch.get("parallel") or backend.get("parallel_slots"),
+        "投機": launch.get("spec_type"),
+        "KV-K": launch.get("cache_type_k"),
+        "KV-V": launch.get("cache_type_v"),
+        "build": backend.get("build_info"),
     }
 
 
 def _fmt_conditions(cond: dict) -> str:
     parts = [f"{k} {v}" for k, v in cond.items() if v is not None]
     return " / ".join(parts) or "—"
+
+
+def _task_set_warnings(rows: list[dict]) -> list[str]:
+    """比較対象ランの task_id 集合を照合し、揃っていなければ警告行を返す.
+
+    タスク集合が違うランの平均を並べても意味がない (難しいタスクを含まない方が
+    高く出る)。共通が0件ならランキング自体が成立しない。
+    """
+    if len(rows) < 2:
+        return []
+    sets = [set(r["results"]) for r in rows]
+    common = set.intersection(*sets)
+    union = set.union(*sets)
+    if len(common) == len(union):
+        return []
+    if not common:
+        return ["", "> 🚨 **比較対象ランに共通タスクが1件もありません。** "
+                    "各スコアは別々の問題セットに対する平均なので、"
+                    "**ランキングは参考値としても使えません**。"
+                    "同じ台帳・同じ --only で測り直してください。", ""]
+    missing = ", ".join(
+        f"{r['label']} {len(union - set(r['results']))}件不足"
+        for r in rows if set(r["results"]) != union
+    )
+    return ["", f"> ⚠️ **タスク集合が揃っていません** (全体 {len(union)}件 / "
+                f"共通 {len(common)}件 — {missing})。"
+                "平均値の比較は共通タスクに限って解釈してください。", ""]
 
 
 def _env_signature(env: dict) -> str:
@@ -277,6 +318,9 @@ def render_comparison(runs: list[dict]) -> str:
         names = ", ".join(f"`{r.get('_path', r.get('model', '?'))}`"
                           for r in empty)
         lines += [f"> ⚠️ 結果0件のため除外: {names}", ""]
+
+    # タスク集合の照合 (別々の問題セットの平均を並べていないか)
+    lines += _task_set_warnings(rows)
 
     # ハードウェア比較では Combined ランキングは同点になり順位が意味を持たない
     # ので出さない (速い環境が下に並んで誤解を生む)。速度ランキングで代替する。

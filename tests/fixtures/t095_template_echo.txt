@@ -1,0 +1,43 @@
+--- FILE: labelcheck.py ---
+```python
+<entire corrected file content>
+```
+No extra explanation. Need include only file. Ensure no test files.
+
+Need decide final code. Let's craft clean minimal.
+
+Potential code:
+```
+import unicodedata
+
+_JAPANESE_TOKENS = {"HIRAGANA", "KATAKANA", "HAN", "CJK"}
+
+
+def _script_of(ch):
+    if not unicodedata.category(ch).startswith("L"):
+        return None
+    name = unicodedata.name(ch, "")
+    if not name:
+        return f"UNKNOWN-{ord(ch):X}"
+    tokens = name.replace("-", " ").split()
+    if any(token in _JAPANESE_TOKENS for token in tokens):
+        return "JAPANESE"
+    return tokens[0]
+
+
+def is_allowed_label(label):
+    if not label:
+        return False
+    label = unicodedata.normalize("NFKC", label)
+    if not label:
+        return False
+    scripts = set()
+    for ch in label:
+        script = _script_of(ch)
+        if script is None:
+            continue
+        scripts.add(script)
+        if len(scripts) > 1:
+            return False
+    return True
+```
