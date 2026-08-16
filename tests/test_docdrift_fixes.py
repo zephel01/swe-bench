@@ -218,10 +218,32 @@ def test_load_tasks_partial_missing_warns_and_continues(tmp_path, capsys):
     assert "tasks_missing.jsonl" in capsys.readouterr().err
 
 
-def test_load_tasks_only_filter_is_not_missing(tmp_path):
-    """`only` で全件除外されただけなら例外にしない (台帳は読めている)。"""
+def test_load_tasks_unknown_only_id_raises(tmp_path):
+    """`only` の task_id が台帳に無ければ例外にする.
+
+    旧挙動は「台帳は読めているので0件で正常終了」だったが、これが実害を出した:
+    L7 のタスクIDを --with-l7 無しで指定すると、1問も実行されないまま
+    resolved_rate=0.0 の results.json が保存され、全問失敗と区別できなかった。
+    """
     _write_ledger(tmp_path, "tasks.jsonl", ["t001"])
-    assert load_tasks(tmp_path, only=["tXXX"], ledgers=["tasks.jsonl"]) == []
+    with pytest.raises(ValueError) as ei:
+        load_tasks(tmp_path, only=["tXXX"], ledgers=["tasks.jsonl"])
+    msg = str(ei.value)
+    assert "tXXX" in msg and "--with-l7" in msg
+
+
+def test_load_tasks_partial_unknown_only_id_raises(tmp_path):
+    """一部だけ見つからない場合も、見つからなかったIDを名指しで報せる."""
+    _write_ledger(tmp_path, "tasks.jsonl", ["t001", "t002"])
+    with pytest.raises(ValueError) as ei:
+        load_tasks(tmp_path, only=["t001", "t069"], ledgers=["tasks.jsonl"])
+    assert "t069" in str(ei.value) and "t001" not in str(ei.value).split("見つかりません")[1].split(chr(10))[0]
+
+
+def test_load_tasks_only_all_found_is_ok(tmp_path):
+    _write_ledger(tmp_path, "tasks.jsonl", ["t001", "t002"])
+    got = load_tasks(tmp_path, only=["t002"], ledgers=["tasks.jsonl"])
+    assert [t.task_id for t in got] == ["t002"]
 
 
 def test_load_tasks_strict_false_allows_all_missing(tmp_path):

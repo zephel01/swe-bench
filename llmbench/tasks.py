@@ -52,7 +52,10 @@ def load_tasks(
     見分けがつかなくなるのを防ぐ。
     一部だけ欠落した場合は警告を出して続行する (既定台帳を置かずドメイン台帳
     だけで運用する構成を許容するため)。
-    `only` で全件除外された場合はここに該当しない (台帳自体は読めている)。
+    `only` で指定した task_id が読み込んだ台帳に**1つも存在しない**場合も
+    ValueError を送出する。L7 のタスクIDを `--with-l7` 無しで指定すると
+    「0タスクで正常終了・resolved_rate=0.0」になり、全問失敗と見分けが
+    つかなくなるため (実害あり: 2026-08-16)。
     """
     ledgers = ledgers or ["tasks.jsonl"]
     tasks = []
@@ -93,6 +96,21 @@ def load_tasks(
                 continue
             seen.add(t.task_id)
             tasks.append(t)
+
+    # 指定した task_id が台帳に無い = 台帳の指定漏れ (--with-l7 等) がほぼ確実。
+    # 黙って0件にすると「モデルが全問落とした」ランとして保存されてしまう。
+    if only:
+        requested = [t.strip() for t in only if str(t).strip()]
+        found = {t.task_id for t in tasks}
+        unknown = [t for t in requested if t not in found]
+        if unknown:
+            raise ValueError(
+                "指定したタスクIDが台帳に見つかりません: "
+                + ", ".join(unknown)
+                + f"\n  読み込んだ台帳: {', '.join(ledgers)}"
+                + "\n  L7 (grandmaster) のタスクは --with-l7 / --only-l7、"
+                "L6 (architect) は --with-l6 / --only-l6 が必要です。"
+            )
 
     if missing:
         paths = ", ".join(str(p) for p in missing)
