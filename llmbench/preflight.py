@@ -112,6 +112,7 @@ class PreflightReport:
     degeneration: dict = field(default_factory=dict)
     live_model_path: str | None = None
     repo_id: str | None = None
+    base_url: str | None = None
 
     def add(self, level: str, check: str, key: str, message: str, **detail) -> None:
         self.findings.append(Finding(level, check, key, message, detail))
@@ -138,6 +139,7 @@ class PreflightReport:
             "effective": self.effective,
             "recommended": self.recommended,
             "recommended_source": self.recommended_source,
+            "base_url": self.base_url,
             "live_model_path": self.live_model_path,
             "repo_id": self.repo_id,
             "server_defaults": self.server_defaults,
@@ -149,6 +151,10 @@ class PreflightReport:
         lines: list[str] = []
         head = f"preflight: {self.model or '(model指定なし)'}"
         lines.append(head)
+        if self.base_url:
+            lines.append(f"  接続先: {self.base_url}"
+                         + (f"  / ロード中: {self.live_model_path}"
+                            if self.live_model_path else "  / サーバ未応答"))
         lines.append("=" * max(len(head), 40))
         by_check: dict[str, list[Finding]] = {}
         for f in self.findings:
@@ -612,96 +618,113 @@ def run_preflight(config: dict, model_name: str | None, *,
                        f"config に models.{model_name} がありません")
             return report
         run_cfg = (config or {}).get("run", {}) or {}
-        client = create_client(model_name, cfg_raw, run_cfg.get("sampling"))
-        effective = sampling_of(client)
-        report.effective = dict(effective)
-
-        # --- 実 payload をそのまま覗く (推測しない)
-        payload: dict = {}
-        if hasattr(client, "_build_payload"):
-            try:
-                payload = client._build_payload("", "")
-            except Exception as e:  # pragma: no cover - 実サーバ依存
-                report.add("WARN", "effective", "-",
-                           f"payload を構築できませんでした: {e}")
-        else:
-            payload = {k: v for k, v in effective.items() if k in SAMPLING_KEYS}
-
-        # --- サーバ既定 / 起動引数
-        server_defaults, launch, n_ctx = {}, {}, None
-        live_model_path: str | None = None
-        base_url = getattr(client, "base_url", "")
-        if base_url:
-            try:
-                from . import env as env_mod
-
-                props = env_mod._get_json(f"{base_url.rsplit('/v1', 1)[0]}/props")
-                server_defaults = env_mod.sampler_defaults(props)
-                if isinstance(props, dict):
-                    gen = props.get("default_generation_settings") or {}
-                    n_ctx = gen.get("n_ctx") or props.get("n_ctx")
-                    # ロード中モデルの実パス。model: "auto" 運用ではこれが唯一の手がかり
-                    live_model_path = (props.get("model_path")
-                                       or gen.get("model") or None)
-                pid = env_mod.find_server_pid(env_mod._port_of(base_url))
-                if pid:
-                    launch = env_mod.parse_server_args(env_mod._proc_argv(pid))
-            except Exception:
-                pass
-
-        if not server_defaults and not launch:
+        try:
+            client = create_client(model_name, cfg_raw, run_cfg.get("sampling"))
+        except Exception as e:
+            # model: "auto" はサーバの /v1/models を引くので、推論サーバが
+            # 動いていないマシン (開発機など) では必ずここで失敗する。
+            # 例外で落とさずレポートにする。C (縮退指数) は続行できる。
             report.add(
-                "INFO", "effective", "-",
-                f"{base_url} に接続できず、サーバ既定(/props)と起動引数を"
-                "照合できませんでした。**llama-server を起動した状態で実行すると"
-                "検査が増えます**（n_ctx との突き合わせなど）",
+                "WARN", "effective", "-",
+                f"クライアントを生成できませんでした: {e}\n"
+                f"       model: {cfg_raw.get('model')!r} / base_url: "
+                f"{cfg_raw.get('base_url')!r}\n"
+                "       **A と B は推論サーバが動いているマシンで実行してください。**"
+                "開発機で確認したいだけなら model に固定名を書けば B の payload 検査までは通ります",
+                base_url=cfg_raw.get("base_url"), model=cfg_raw.get("model"),
             )
-        class_defaults = {"temperature": 0.2, "max_tokens": 4096}
-        check_effective(report, cfg_raw=cfg_raw, payload=payload,
-                        server_defaults=server_defaults, launch=launch,
-                        class_defaults=class_defaults, n_ctx=n_ctx)
+            client = None
+        if client is not None:
+            effective = sampling_of(client)
+            report.effective = dict(effective)
 
-        # --- 公式推奨
-        recommended, source = {}, ""
-        repo_id = resolve_repo_id(model_name, cfg_raw, run_cfg,
-                                  live_model_path=live_model_path)
-        report.live_model_path = live_model_path
-        report.repo_id = repo_id
-        if repo_id:
-            gc = fetch_generation_config(repo_id, offline=offline)
-            if gc:
-                recommended = normalize_generation_config(gc)
-                source = f"huggingface.co/{repo_id}/generation_config.json"
-        if not recommended:
-            table = load_recommended_table(recommended_table)
-            key = repo_id or cfg_raw.get("recommended_key") or model_name
-            entry = table.get(key) or {}
-            mode = cfg_raw.get("thinking_mode") or entry.get("default_mode") or "thinking"
-            vals = (entry.get("modes") or {}).get(mode) or {}
-            if vals:
-                recommended = dict(vals)
-                source = f"{_RECOMMENDED_FILE.name}: {key} / {mode}"
-
-        # 解決に失敗したときは「何を見たか」を必ず出す
-        diag = ""
-        if not recommended:
-            seen = live_model_path or cfg_raw.get("model_path") or cfg_raw.get("model")
-            prefixes = list((run_cfg.get("hf_repo_map") or {}).keys())
-            parts = [f"照合に使ったパス: {seen!r}"]
-            if live_model_path is None:
-                parts.append("(サーバから取得できず。llama-server を起動して実行するか "
-                             "models.<name>.hf_repo を明示してください)")
-            if prefixes:
-                parts.append(f"run.hf_repo_map の前方一致候補: {prefixes}")
+            # --- 実 payload をそのまま覗く (推測しない)
+            payload: dict = {}
+            if hasattr(client, "_build_payload"):
+                try:
+                    payload = client._build_payload("", "")
+                except Exception as e:  # pragma: no cover - 実サーバ依存
+                    report.add("WARN", "effective", "-",
+                               f"payload を構築できませんでした: {e}")
             else:
-                parts.append("run.hf_repo_map が未設定です")
-            if repo_id:
-                parts.append(f"→ repo_id={repo_id} は解決できたが推奨値が引けませんでした "
-                             "(オフライン or テーブル未登録)")
-            diag = " / ".join(parts)
+                payload = {k: v for k, v in effective.items() if k in SAMPLING_KEYS}
 
-        check_recommended(report, effective, recommended, source=source,
-                          diagnostic=diag)
+            # --- サーバ既定 / 起動引数
+            server_defaults, launch, n_ctx = {}, {}, None
+            live_model_path: str | None = None
+            base_url = getattr(client, "base_url", "")
+            report.base_url = base_url or None
+            if base_url:
+                try:
+                    from . import env as env_mod
+
+                    props = env_mod._get_json(f"{base_url.rsplit('/v1', 1)[0]}/props")
+                    server_defaults = env_mod.sampler_defaults(props)
+                    if isinstance(props, dict):
+                        gen = props.get("default_generation_settings") or {}
+                        n_ctx = gen.get("n_ctx") or props.get("n_ctx")
+                        # ロード中モデルの実パス。model: "auto" 運用ではこれが唯一の手がかり
+                        live_model_path = (props.get("model_path")
+                                           or gen.get("model") or None)
+                    pid = env_mod.find_server_pid(env_mod._port_of(base_url))
+                    if pid:
+                        launch = env_mod.parse_server_args(env_mod._proc_argv(pid))
+                except Exception:
+                    pass
+
+            if not server_defaults and not launch:
+                report.add(
+                    "INFO", "effective", "-",
+                    f"{base_url} に接続できず、サーバ既定(/props)と起動引数を"
+                    "照合できませんでした。**llama-server を起動した状態で実行すると"
+                    "検査が増えます**（n_ctx との突き合わせなど）",
+                )
+            class_defaults = {"temperature": 0.2, "max_tokens": 4096}
+            check_effective(report, cfg_raw=cfg_raw, payload=payload,
+                            server_defaults=server_defaults, launch=launch,
+                            class_defaults=class_defaults, n_ctx=n_ctx)
+
+            # --- 公式推奨
+            recommended, source = {}, ""
+            repo_id = resolve_repo_id(model_name, cfg_raw, run_cfg,
+                                      live_model_path=live_model_path)
+            report.live_model_path = live_model_path
+            report.repo_id = repo_id
+            if repo_id:
+                gc = fetch_generation_config(repo_id, offline=offline)
+                if gc:
+                    recommended = normalize_generation_config(gc)
+                    source = f"huggingface.co/{repo_id}/generation_config.json"
+            if not recommended:
+                table = load_recommended_table(recommended_table)
+                key = repo_id or cfg_raw.get("recommended_key") or model_name
+                entry = table.get(key) or {}
+                mode = cfg_raw.get("thinking_mode") or entry.get("default_mode") or "thinking"
+                vals = (entry.get("modes") or {}).get(mode) or {}
+                if vals:
+                    recommended = dict(vals)
+                    source = f"{_RECOMMENDED_FILE.name}: {key} / {mode}"
+
+            # 解決に失敗したときは「何を見たか」を必ず出す
+            diag = ""
+            if not recommended:
+                seen = live_model_path or cfg_raw.get("model_path") or cfg_raw.get("model")
+                prefixes = list((run_cfg.get("hf_repo_map") or {}).keys())
+                parts = [f"照合に使ったパス: {seen!r}"]
+                if live_model_path is None:
+                    parts.append("(サーバから取得できず。llama-server を起動して実行するか "
+                                 "models.<name>.hf_repo を明示してください)")
+                if prefixes:
+                    parts.append(f"run.hf_repo_map の前方一致候補: {prefixes}")
+                else:
+                    parts.append("run.hf_repo_map が未設定です")
+                if repo_id:
+                    parts.append(f"→ repo_id={repo_id} は解決できたが推奨値が引けませんでした "
+                                 "(オフライン or テーブル未登録)")
+                diag = " / ".join(parts)
+
+            check_recommended(report, effective, recommended, source=source,
+                              diagnostic=diag)
 
     if artifacts:
         scan = scan_artifacts(Path(artifacts), results_json=(
