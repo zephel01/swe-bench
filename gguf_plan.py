@@ -49,6 +49,14 @@ Q8_FACTOR = 0.53
 DEFAULT_OVERHEAD_GIB = 1.0
 #: --ctx-size はこの単位に切り下げる
 CTX_STEP = 4096
+#: `--ctx` 未指定のときに選ぶ「きりのいい」ctx。予算に収まる最大のものを採る。
+#: 予算いっぱいまで詰めた半端な値 (例 69,632) を勧めてはいけない:
+#:   ・オーバーヘッドの見積り誤差 (較正点は1つしかない) を吸収できない
+#:   ・65,536 に対して context 6% 増しか得ていない
+STANDARD_CTX = (4096, 8192, 16384, 32768, 49152, 65536, 98304,
+                131072, 196608, 262144, 393216, 524288, 1048576)
+#: 余りがこれを下回るときは警告する (GiB)
+MIN_HEADROOM_GIB = 0.5
 
 THINKING_SAMPLING = {
     "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0,
@@ -83,6 +91,37 @@ def max_ctx(rec: dict, vram_gib: float, kv_mode: str, overhead: float) -> int:
     n -= n % CTX_STEP
     native = rec.get("context_length") or n
     return max(0, min(n, native))
+
+
+def recommended_ctx(rec: dict, vram_gib: float, kv_mode: str, overhead: float) -> int:
+    """`--ctx` 未指定のときに勧める ctx。
+
+    ``max_ctx`` の「予算に入る最大値」をそのまま使うと 69,632 のような半端な
+    値になり、余りが 0.02 GiB しか残らない。オーバーヘッドの較正点は1つしか
+    ないので、その誤差で起動に失敗する。**きりのいい値に丸めて余裕を残す。**
+    """
+    cap = max_ctx(rec, vram_gib, kv_mode, overhead)
+    if not cap:
+        return 0
+    fits = [c for c in STANDARD_CTX if c <= cap]
+    return fits[-1] if fits else cap
+
+
+def headroom_gib(rec: dict, ctx: int, kv_mode: str, vram_gib: float,
+                 overhead: float) -> float:
+    """この設定で VRAM がどれだけ余るか (GiB)。負なら入らない。"""
+    return vram_gib - (file_gib(rec) + kv_gib(rec, ctx, kv_mode) + overhead)
+
+
+def model_path_of(rec: dict, override: str | None) -> str:
+    """起動コマンドの -m に書くパス.
+
+    gguf_probe が絶対パスを記録していればそれを使う。古い JSON にはこのキーが
+    無いので、その場合だけプレースホルダに落とす。
+    """
+    if override:
+        return override
+    return rec.get("path") or f"/path/to/{rec['file']}"
 
 
 def short(rec: dict) -> str:
@@ -134,6 +173,19 @@ def emit_config(rec: dict, ctx: int, kv_mode: str, vram: float, overhead: float,
     L.append(f"# ===== {short(rec)} / ctx {ctx:,} / KV {kv_mode} =====")
     L.append(f"# 見積り: モデル {file_gib(rec):.2f} + KV {kv_gib(rec, ctx, kv_mode):.2f} "
              f"+ オーバーヘッド {overhead:.2f} = {used:.2f} GiB / 予算 {vram:.1f} GiB")
+    hr = vram - used
+    if hr < 0:
+        L.append(f"# ❌ 予算を {-hr:.2f} GiB 超えています。起動しません")
+    elif hr < MIN_HEADROOM_GIB:
+        L.append(f"# ⚠️ 余りが {hr:.2f} GiB しかありません。オーバーヘッドの較正点は1つ"
+                 f"しかないので、実測がこれを超えると起動に失敗します")
+        # 既に q8_0 なら「q8_0 にしろ」とは言わない
+        if kv_mode == "f16":
+            L.append("#    KV を q8_0 にする (-ctk q8_0 -ctv q8_0) か、ctx を1段下げてください")
+        else:
+            L.append("#    ctx を1段下げるか、1つ軽い量子化にしてください")
+    else:
+        L.append(f"# 余り {hr:.2f} GiB")
     L.append(f"# native ctx = {rec.get('context_length', 0):,}"
              + ("  / rope scaling なし" if not rec.get("rope_scaling_type") else
                 f"  / rope scaling: {rec.get('rope_scaling_type')}"))
@@ -229,18 +281,26 @@ def main() -> int:
             print(f"# ※ ctx {ctx:,} は f16 では入らないので KV を q8_0 にしました",
                   file=sys.stderr)
     if ctx is None:
-        ctx = max_ctx(rec, args.vram, kv_mode, args.overhead)
+        cap = max_ctx(rec, args.vram, kv_mode, args.overhead)
+        ctx = recommended_ctx(rec, args.vram, kv_mode, args.overhead)
         if not ctx:
             sys.exit(f"{short(rec)} は VRAM {args.vram} GiB に入りません "
                      f"(モデルだけで {file_gib(rec):.2f} GiB)")
-        print(f"# ※ ctx 未指定なので予算いっぱいの {ctx:,} にしました", file=sys.stderr)
+        note = f"# ※ ctx 未指定なので {ctx:,} にしました"
+        if cap > ctx:
+            note += (f" (予算上は {cap:,} まで入りますが、半端な値は"
+                     f"オーバーヘッドの誤差を吸収できないのできりのいい値に丸めます)")
+        print(note, file=sys.stderr)
 
-    used = file_gib(rec) + kv_gib(rec, ctx, kv_mode) + args.overhead
-    if used > args.vram:
-        print(f"# ⚠️ 見積り {used:.2f} GiB が予算 {args.vram:.1f} GiB を超えています",
+    hr = headroom_gib(rec, ctx, kv_mode, args.vram, args.overhead)
+    if hr < 0:
+        print(f"# ⚠️ 見積りが予算 {args.vram:.1f} GiB を {-hr:.2f} GiB 超えています",
               file=sys.stderr)
 
-    mp = args.model_path or f"/path/to/{rec['file']}"
+    mp = model_path_of(rec, args.model_path)
+    if not rec.get("path") and not args.model_path:
+        print("# ※ この gguf.json には絶対パスが入っていないので -m はプレースホルダです。"
+              "gguf_probe を取り直すか --model-path を渡してください", file=sys.stderr)
     print(emit_config(rec, ctx, kv_mode, args.vram, args.overhead,
                       mp, args.port, args.device))
     return 0

@@ -114,6 +114,80 @@ def test_max_ctx_zero_without_kv_metadata():
     assert gguf_plan.max_ctx({"size_gb": 1.0}, 24.0, "f16", 1.0) == 0
 
 
+# --- 勧める ctx は「きりのいい値」に丸める ------------------------------
+
+def test_recommended_ctx_rounds_down_to_a_standard_value():
+    """予算いっぱいの 69,632 をそのまま勧めてはいけない.
+
+    余りが 0.02 GiB しか残らず、オーバーヘッドの見積り誤差 (較正点は1つ)
+    で起動に失敗する。65,536 に対して context 6% 増しか得ていない。
+    """
+    cap = gguf_plan.max_ctx(Q5_K_M, 24.0, "f16", 1.0)
+    rec = gguf_plan.recommended_ctx(Q5_K_M, 24.0, "f16", 1.0)
+    assert cap == 69632
+    assert rec == 65536
+    assert rec in gguf_plan.STANDARD_CTX
+    assert rec <= cap
+
+
+def test_recommended_ctx_leaves_usable_headroom():
+    ctx = gguf_plan.recommended_ctx(Q5_K_M, 24.0, "f16", 1.0)
+    assert gguf_plan.headroom_gib(Q5_K_M, ctx, "f16", 24.0, 1.0) >= 0.2
+
+
+def test_recommended_ctx_zero_when_nothing_fits():
+    assert gguf_plan.recommended_ctx(Q5_K_M, 8.0, "f16", 1.0) == 0
+
+
+def test_recommended_ctx_capped_by_native_even_with_huge_budget():
+    assert gguf_plan.recommended_ctx(Q5_K_M, 500.0, "f16", 1.0) == 262144
+
+
+def test_headroom_is_negative_when_it_does_not_fit():
+    assert gguf_plan.headroom_gib(Q5_K_M, 262144, "f16", 24.0, 1.0) < 0
+
+
+def test_thin_headroom_is_warned_in_the_output():
+    """ぎりぎりの設定は、そうと書かないと事故になる."""
+    out = gguf_plan.emit_config(Q5_K_M, 69632, "f16", vram=24.0, overhead=1.0,
+                                model_path="/m/x.gguf", port=8085, device="CUDA0")
+    assert "⚠️" in out
+    assert "余り" in out
+    assert "q8_0 にする" in out          # f16 なら q8_0 を勧める
+
+
+def test_thin_headroom_does_not_suggest_q8_when_already_q8():
+    out = gguf_plan.emit_config(Q5_K_M, 131072, "q8_0", vram=24.0, overhead=1.0,
+                                model_path="/m/x.gguf", port=8085, device="CUDA0")
+    assert "⚠️" in out
+    assert "q8_0 にする" not in out      # 既に q8_0 なのに勧めては意味がない
+    assert "ctx を1段下げる" in out
+
+
+def test_comfortable_headroom_is_reported_plainly():
+    out = gguf_plan.emit_config(Q5_K_M, 32768, "f16", vram=24.0, overhead=1.0,
+                                model_path="/m/x.gguf", port=8085, device="CUDA0")
+    assert "⚠️" not in out
+    assert "余り" in out
+
+
+# --- -m に書くパス ------------------------------------------------------
+
+def test_model_path_uses_the_recorded_absolute_path():
+    rec = {**Q5_K_M, "path": "/mnt/data/models/X/Qwen3.8-27B-Q5_K_M.gguf"}
+    assert gguf_plan.model_path_of(rec, None) == rec["path"]
+
+
+def test_model_path_override_wins():
+    rec = {**Q5_K_M, "path": "/recorded/x.gguf"}
+    assert gguf_plan.model_path_of(rec, "/override/y.gguf") == "/override/y.gguf"
+
+
+def test_model_path_falls_back_for_old_json_without_path():
+    """path キーが無い古い gguf.json でも壊れず、プレースホルダになる."""
+    assert gguf_plan.model_path_of(Q5_K_M, None).endswith(Q5_K_M["file"])
+
+
 # --- 生成される起動コマンド ----------------------------------------------
 
 def emit(rec, ctx=65536, kv="f16"):
@@ -155,7 +229,13 @@ def test_quantized_kv_always_ships_with_flash_attention():
 
 
 def test_f16_does_not_emit_ctk_flags():
-    assert "-ctk" not in emit(Q5_K_M, kv="f16")
+    """コマンドの**引数として** -ctk が出ないこと.
+
+    余裕不足の注記の中で「KV を q8_0 にする (-ctk ...)」と提案することは
+    あるので、本文全体の in 判定では区別できない。
+    """
+    out = emit(Q5_K_M, kv="f16")
+    assert not any(ln.strip().startswith("-ctk") for ln in out.splitlines())
 
 
 # --- MTP / サンプリングの出し分け ---------------------------------------

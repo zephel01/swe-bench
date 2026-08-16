@@ -239,6 +239,9 @@ def probe(path: Path) -> dict:
     r = _reader_class()(str(path))
     out: dict = {
         "file": path.name,
+        # 絶対パスも残す。gguf_plan が -m にそのまま書けるようにするため
+        # (ファイル名だけだと起動コマンドがプレースホルダになる)
+        "path": str(path.resolve()),
         "size_gb": round(path.stat().st_size / 1e9, 2),
         "architecture": _kv(r, "general.architecture"),
         "file_type": _kv(r, "general.file_type"),
