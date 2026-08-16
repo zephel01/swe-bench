@@ -164,12 +164,46 @@ def cmd_models(args) -> int:
     return 0
 
 
+def _preflight_gate(args, config: dict) -> int | None:
+    """ベンチを走らせる前に設定を照合する。FAIL なら走らせない.
+
+    2026-08 に temperature 0.2 のまま16ラン(9.3時間)を回して測り直した。
+    知識の問題ではなく「チェックを人手に任せていた」ことが原因なので、
+    忘れても効くようにここで止める。
+
+    - FAIL: 走らせない (--skip-preflight で無視できる)
+    - WARN/INFO: 表示して続行
+    - 生成は1トークンも行わないので、実行時間はほぼゼロ
+    """
+    if getattr(args, "skip_preflight", False):
+        return None
+    try:
+        from .preflight import run_preflight
+        report = run_preflight(config, args.model)
+    except Exception as e:      # preflight 自体の失敗でベンチを止めない
+        print(f"⚠️  preflight を実行できませんでした ({e})。続行します", file=sys.stderr)
+        return None
+    if report.worst in ("WARN", "FAIL"):
+        print(report.render(), file=sys.stderr)
+        print(file=sys.stderr)
+    if report.worst == "FAIL":
+        print("❌ preflight が FAIL です。設定を直してから再実行してください。",
+              file=sys.stderr)
+        print("   この判定を承知で走らせるなら --skip-preflight を付けてください。",
+              file=sys.stderr)
+        return 2
+    return None
+
+
 def cmd_run(args) -> int:
     config = _load_config(args.config)
     if args.lang:
         config.setdefault("run", {})["issue_lang"] = args.lang
     if getattr(args, "ollama_host", None):
         config.setdefault("run", {})["ollama_host"] = args.ollama_host
+    gate = _preflight_gate(args, config)
+    if gate is not None:
+        return gate
     runner = BenchmarkRunner(config, Path(args.tasks_dir), ledgers=_ledgers(args))
     only = args.tasks.split(",") if args.tasks else None
     try:
@@ -367,6 +401,11 @@ def main() -> None:
         "--concurrency", type=int, default=None,
         help="試行(runs)を同時実行する並列数 (既定: run.concurrency または1)。"
              "llama.cpp を --parallel N -cb で起動した場合に有効",
+    )
+    p_run.add_argument(
+        "--skip-preflight", action="store_true", dest="skip_preflight",
+        help="実行前の設定照合 (preflight) を省略する。"
+             "FAIL でも走らせたいときだけ使う",
     )
     p_run.set_defaults(fn=cmd_run)
 
