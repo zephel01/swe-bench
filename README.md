@@ -339,6 +339,8 @@ swe-bench/
 │                       #    + tasks_sec/gen/write/med.jsonl (ドメイン, --with-sec/gen/write/med)
 ├── tests/              # ✅ pytestユニットテスト (certify --merge / cli_agent / 接続 / 台帳ロード)
 ├── DESIGN_DOMAINS.md   # 📐 マルチドメイン拡張の設計仕様
+├── gguf_probe.py       # 🔍 GGUFを読んで --ctx-size / KV VRAM / draft-mtp の可否を決める
+├── GGUF_PROBE.md       # 🔍 その使い方と読み方
 └── config.yaml
 ```
 
