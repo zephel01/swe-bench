@@ -343,9 +343,10 @@ swe-bench/
 │   ├── MANUAL.md       #    🛠️ 出力仕様・内部実装・運用
 │   ├── TASKS.md        #    🧩 タスク台帳の設計と追加方法
 │   ├── DESIGN_DOMAINS.md #  📐 マルチドメイン拡張の設計仕様
-│   ├── GGUF_PROBE.md   #    🔍 gguf_probe.py の使い方と読み方
+│   ├── GGUF_PROBE.md   #    🔍 gguf_probe / gguf_plan の使い方と読み方
 │   └── CHANGES.md      #    📝 変更履歴
-├── gguf_probe.py       # 🔍 GGUFを読んで --ctx-size / KV VRAM / draft-mtp の可否を決める
+├── gguf_probe.py       # 🔍 GGUFを読む (--ctx-size上限 / KV VRAM / draft-mtp の可否)
+├── gguf_plan.py        # 🔍 読んだ結果を起動コマンドと config.yaml に落とす
 ├── run_tests.sh        # ✅ テスト実行 (uv で隔離環境を用意して pytest)
 └── config.yaml
 ```
