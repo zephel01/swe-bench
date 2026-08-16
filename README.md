@@ -26,9 +26,9 @@
 - 🎲 **信頼性 (pass@k)** — `--runs N` で各タスクをN回試行し、成功率(pass@1)・pass@k・フレ(flaky)を計測。「1回成功＝使える」ではなく**安定して使えるか**を測る
 - 🧭 **usability判定** — 信頼性×品質から各タスクを **🟢自律 / 🟡補助 / 🔴不可** に分類し、「実際どれくらい任せられるか」を提示
 - 🎓 **使えるライン認証 (`certify`)** — 難易度を tier(L1-L7) にマップし、tierごとの合格判定で「ここまでクリアできれば使える」を提示。**L4(expert)独立合格＝実務投入ライン**。最上位帯の頭打ちを測る **L7(grandmaster)** は天井評価帯。分割実行した複数 results.json は `certify --merge` で1つの認証に統合可
-- 🌐 **マルチドメイン評価** — コーディング以外も測る **pluggable grader**。**detection**(脆弱性/ログ検出＝F1採点＋過検出デコイ)・**constraint**(指示追従＝IFEval式の機械検証)・**judge**(創作＝rubric採点)・**qa**(医療QA＝日英アンサーキー)。`--with-sec/gen/write/med` で上乗せ、`certify` はドメイン別ゲート＋**バランス指数**(一芸特化を炙り出す)を出力。設計は [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md)
+- 🌐 **マルチドメイン評価** — コーディング以外も測る **pluggable grader**。**detection**(脆弱性/ログ検出＝F1採点＋過検出デコイ)・**constraint**(指示追従＝IFEval式の機械検証)・**judge**(創作＝rubric採点)・**qa**(医療QA＝日英アンサーキー)。`--with-sec/gen/write/med` で上乗せ、`certify` はドメイン別ゲート＋**バランス指数**(一芸特化を炙り出す)を出力。設計は [📐 DESIGN_DOMAINS.md](docs/DESIGN_DOMAINS.md)
 - ⚖️ **複合スコア** — 動かないコードは0点。動くコードを成功率と品質で差別化
-- 🔌 **接続自在** — OpenAI互換API (llama.cpp / LM Studio / vLLM) と Ollama 両対応。**`model: auto`** でサーバのロード中モデルを自動採用（config編集不要）、Ollamaは**インストール済みモデルを動的に選択**。さらに **`type: cli`** で公式エージェントCLI (claude / codex / grok) を**サブスク定額枠のままヘッドレス実行**（従量APIキー不要。エージェント込み計測になる点は [USAGE 3.5](USAGE.md) 参照）
+- 🔌 **接続自在** — OpenAI互換API (llama.cpp / LM Studio / vLLM) と Ollama 両対応。**`model: auto`** でサーバのロード中モデルを自動採用（config編集不要）、Ollamaは**インストール済みモデルを動的に選択**。さらに **`type: cli`** で公式エージェントCLI (claude / codex / grok) を**サブスク定額枠のままヘッドレス実行**（従量APIキー不要。エージェント込み計測になる点は [USAGE 3.5](docs/USAGE.md) 参照）
 - 🆚 **モデル横断比較** — `compare` で複数結果を1枚のランキング・マトリクスに。参照モデル(API)を併置して位置づけ
 - 🇯🇵 **日英issue同梱** — `--lang ja` で「language tax」(日本語指示による性能低下)を計測可能。医療QAなど日本語回答モデルも gold の日英許容語で正しく採点
 - ⚡ **速度計測** — タスク別レイテンシ / tok/s をレポートに自動記録。**生成時間はパース失敗時のリトライを含む合計、tok/s と生成トークン数は最終生成のみの値**(掛け算しても生成トークン数には戻らない点に注意)
@@ -90,7 +90,7 @@ llmbench certify results/<stamp>_<model>_results.json
 実行中のログにも、タスクごとに生成ファイル・コード冒頭・パース/テスト結果が出力されるので、その場で「ちゃんと動いているか」を確認できます。
 
 > [!TIP]
-> 実行ログ・レポート・生成物の**読み解き方**やモデル比較の手順は [📘 利用ガイド (USAGE.md)](USAGE.md) を参照。
+> 実行ログ・レポート・生成物の**読み解き方**やモデル比較の手順は [📘 利用ガイド (USAGE.md)](docs/USAGE.md) を参照。
 
 <details>
 <summary>📄 レポート出力例 (--runs 5)</summary>
@@ -199,7 +199,7 @@ L6 の閾値は 2026-06-26 の実モデル較正で確定済み。L7 の閾値�
 コーディングの隠しpytestオラクルを、**採点器(grader)を差し替え可能**にすることで他能力へ横展開する。
 各 grader は「出力契約(プロンプト)」と「採点」を持ち、最終的に `(resolved, quality)` に正規化して返す。
 だから既存の pass@k / combined / usability / certify を**一切変更せず**再利用できる。設計の詳細は
-[📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md)。
+[📐 DESIGN_DOMAINS.md](docs/DESIGN_DOMAINS.md)。
 
 | ドメイン | grader | 台帳 / フラグ | 何を・どう測るか |
 |---|---|---|---|
@@ -338,9 +338,15 @@ swe-bench/
 │                       #    + tasks_l7_v1.jsonl (旧L7 40問, t061–t100。退避済み。--l7-ledger tasks_l7_v1.jsonl で再実行可)
 │                       #    + tasks_sec/gen/write/med.jsonl (ドメイン, --with-sec/gen/write/med)
 ├── tests/              # ✅ pytestユニットテスト (certify --merge / cli_agent / 接続 / 台帳ロード)
-├── DESIGN_DOMAINS.md   # 📐 マルチドメイン拡張の設計仕様
+├── docs/               # 📚 ドキュメント一式。索引は docs/README.md
+│   ├── USAGE.md        #    📘 実行手順と結果の読み解き方
+│   ├── MANUAL.md       #    🛠️ 出力仕様・内部実装・運用
+│   ├── TASKS.md        #    🧩 タスク台帳の設計と追加方法
+│   ├── DESIGN_DOMAINS.md #  📐 マルチドメイン拡張の設計仕様
+│   ├── GGUF_PROBE.md   #    🔍 gguf_probe.py の使い方と読み方
+│   └── CHANGES.md      #    📝 変更履歴
 ├── gguf_probe.py       # 🔍 GGUFを読んで --ctx-size / KV VRAM / draft-mtp の可否を決める
-├── GGUF_PROBE.md       # 🔍 その使い方と読み方
+├── run_tests.sh        # ✅ テスト実行 (uv で隔離環境を用意して pytest)
 └── config.yaml
 ```
 
@@ -378,7 +384,7 @@ tasks/tXXX_name/
 **ドメインタスク** (detection / constraint / judge / qa) は `buggy_code`・`tests` を持たず、
 台帳レコードに `grader` と `domain` を指定する。gold の形は grader ごとに異なる
 (detection=`gold.json`のラベル / constraint=`checks.json`＋`gold_answer.md` / judge=`rubric.json`＋`gold_answer.md` /
-qa=`gold.json`のキー)。スキーマと採点規約は [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) を参照。
+qa=`gold.json`のキー)。スキーマと採点規約は [📐 DESIGN_DOMAINS.md](docs/DESIGN_DOMAINS.md) を参照。
 
 ```json
 {"task_id":"s01","dir":"s01_name","grader":"detection","domain":"security","difficulty":"sec_medium","title":"..."}

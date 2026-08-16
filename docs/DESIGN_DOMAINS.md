@@ -2,7 +2,7 @@
 
 **版**: 1.1（Phase 1 実装済み・稼働中 / medical は Phase 1.5 として追加実装済み。詳細は §8）
 **対象**: llmbench に「コーディング以外の能力」を測る採点軸を追加する
-**関連**: README.md（既存アーキテクチャ） / TASKS.md（タスク設計） / certify.py（tier認証）
+**関連**: [../README.md](../README.md)（既存アーキテクチャ） / [TASKS.md](TASKS.md)（タスク設計） / `llmbench/certify.py`（tier認証）
 
 ---
 
