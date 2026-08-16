@@ -29,3 +29,9 @@ _to_delete/
 # config
 config.yaml.*
 config.yaml
+
+# ブランチ切り替え時の退避 (uv.lock.mainbak.* など)
+uv.lock.*
+
+# 適用済みパッチの置き場。適用結果そのものはコミット履歴に入るので追跡しない
+diffs/
