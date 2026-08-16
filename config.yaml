@@ -8,14 +8,76 @@ models:
     base_url: "http://localhost:8085/v1"
     model: "auto"   # auto = サーバ(/v1/models)のロード中モデルを自動採用。ggufを差し替えてもconfig編集不要
     api_key: "sk-local"                    # ローカルはダミーでOK
-    temperature: 0.2
+
+    # ══════════════════════════════════════════════════════════════════
+    # サンプリング (2026-08-16 改訂)
+    # ══════════════════════════════════════════════════════════════════
+    # ⚠️ 従来ここは temperature: 0.2 のみで、top_p/top_k/min_p/seed は
+    #    **1つも送信していなかった**。llama-server の既定 (seed=-1 = 毎回
+    #    ランダム) が効いていたため、同一設定の再走で L7 16問中 13〜16問の
+    #    生成コードが変わり、再現性を検証できなかった。
+    #
+    # ⚠️ さらに temperature 0.2 は thinking モデルには低すぎる。数万トークンの
+    #    思考を1本の連鎖で生成するので、分布が尖っていると縮退ループに落ちる。
+    #    実測 (Qwen3.8-27B / L7) で観測した縮退:
+    #      ・"1,1,1,1,..." を1行 15,434 文字
+    #      ・"ARABIC LETTER KAF WITH TWO DOTS BELOW AND ..." を出力上限まで
+    #      ・"If they test \"Hello...World\" -> hello-world. Good." を 1,552 行
+    #    いずれも content が空のまま max_tokens に到達している。
+    #
+    # ⚠️ 予算を増やしても直らない。max_tokens 24576 → 49152 (ctx 65536) に
+    #    倍増しても Resolved は 75.0% で不変。むしろ 11,000 トークンで解けて
+    #    いた t101 が 49,152 トークン使って失敗するようになった。
+    #
+    # → Qwen3.8 の公式推奨 (thinking) に合わせる。非thinkingモデルに戻すなら
+    #   temperature: 0.2 / top_k: 40 あたりに戻すこと (下の -lowtemp 参照)。
+    #     thinking     : temp 1.0 / top_p 0.95 / top_k 20 / min_p 0.0
+    #     non-thinking : temp 0.7 / top_p 0.80 / top_k 20 / presence_penalty 1.5
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 20
+    min_p: 0.0
+
+    # ⚠️ seed は runs: 1 のときだけ書くこと。
+    #    現状 runner は run ごとに seed を振り分けないので、runs>1 で seed を
+    #    固定すると 5回とも同じ条件で叩くことになり pass@k の前提が崩れる。
+    #    runs>1 で回すときはこの行をコメントアウトする (= 毎回ランダム)。
+    seed: 42
+
     # Gemma 4 等の thinking(推論)モデル対策で 4096 → 24576 に引き上げ。
     #   推論モデルは <think> 分の reasoning トークンで出力予算を食う。4096 だと
     #   難タスク(expert/frontier/architect)で推論だけで上限に達し、パッチ(content)を
     #   出す前に生成停止 → content 空 → "empty output / patch parse failed" になる。
-    #   llama-server は -c 32768 で起動しているので 24576 でも余裕(prompt は小さい)。
     #   非推論モデル(qwen2.5-coder 等)なら 4096 のままで良い。
-    max_tokens: 24576
+    # ⚠️ 49152 に上げても L7 の Resolved は改善しなかった (上記)。24576 に戻すと
+    #    1ランあたり数十分短縮できる。サンプリングの切り分けが済むまでは、
+    #    A/B の条件を揃える目的で 49152 のままにしてある。
+    max_tokens: 49152
+    timeout: 600
+
+    # 思考予算をリクエスト単位で絞る。Qwen3.8 は reasoning_effort に対応。
+    # ⚠️ 有効化すると「素の性能」を測らないことになるので、比較時に注釈が要る。
+    # reasoning_effort: "medium"     # low | medium | high
+
+  # ── A/B 対照: 従来の低温条件 ────────────────────────────────────
+  # 上の local-openai と **サンプリング以外まったく同じ**。同じサーバを叩く。
+  # 「temperature を上げると縮退ループが止まるのか」を、条件を1つだけ変えて
+  # 測るためのエントリ。config を書き換えて往復する必要がなく、どちらで測った
+  # かが results.json の environment.sampling に残る。
+  #   実行例:
+  #     llmbench run --model local-openai         --only-l7   # 公式推奨
+  #     llmbench run --model local-openai-lowtemp --only-l7   # 従来条件
+  local-openai-lowtemp:
+    type: openai
+    base_url: "http://localhost:8085/v1"
+    model: "auto"
+    api_key: "sk-local"
+    temperature: 0.2        # ← ここだけが違う (縮退ループの容疑)
+    top_p: 0.95
+    top_k: 20
+    min_p: 0.0
+    seed: 42
+    max_tokens: 49152
     timeout: 600
     # 計算バックエンド。省略時は推論プロセスのロード済みライブラリから自動検出する
     # (CUDA / ROCm / Vulkan / SYCL / Metal / CPU)。llama.cpp の /props は
@@ -173,6 +235,27 @@ run:
                           #   運用しているモデルを別物の設定で測ることになり、
                           #   思考モデルでは推論が発散してトークン量・実行時間も膨らむ。
                           #   pass@k に必要な多様性は確保しつつ実運用に近い 0.35 にする。
+                          #
+                          # ⚠️⚠️ 思考モデルを 5runs で測るときの罠 ⚠️⚠️
+                          #   local-openai の temperature を公式推奨の 1.0 にしても、
+                          #   runs>1 にした瞬間この 0.35 に **差し替えられる**。
+                          #   つまり「公式推奨で pass@k を測る」ができない。
+                          #   思考モデルの本検証をするときは、次のどちらかにすること:
+                          #     (a) sample_temp: 1.0 に上げる (= 公式推奨のまま測る)
+                          #     (b) CLI で `--sample-temp 1.0` を渡す
+                          #   低温側は上の local-openai-lowtemp を runs>1 で回す。
+                          #
+                          #   本来は「温度で多様性を作る」のではなく「seed を run ごとに
+                          #   振る」のが正しい。現状 runner に per-run seed の仕組みが
+                          #   無いため、当面は温度で代用する (未対応項目)。
+
+  # ── 全モデル共通のサンプリング既定値 (models 側の指定が優先) ──
+  # models に書き忘れたキーだけをここで補う。空にしておけば従来動作のまま。
+  # ⚠️ ここに seed を書くと全モデルに効いてしまうので、seed はモデル側に書くこと。
+  # sampling:
+  #   top_p: 0.95
+  #   top_k: 20
+  #   min_p: 0.0
   concurrency: 1          # 試行(runs)の同時実行数 (既定1=直列)。
                           #   ローカル(llama.cpp)は --parallel N -cb で起動したときだけ >1 が有効。
                           #   クラウドAPIは --concurrency 3 のようにCLIで都度指定する
