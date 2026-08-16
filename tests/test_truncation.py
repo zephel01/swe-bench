@@ -208,9 +208,9 @@ def test_sampling_of_reports_effective_values_and_reproducibility():
     s = sampling_of(c)
     assert set(SAMPLING_KEYS) <= set(s)
     assert s["temperature"] == 0.8
-    assert s["reproducible"] is False
+    assert s["seed_sent"] is False
     c.seed = 42
-    assert sampling_of(c)["reproducible"] is True
+    assert sampling_of(c)["seed_sent"] is True
 
 
 # ────────────────── ③ runner への伝播 ──────────────────
@@ -245,7 +245,7 @@ def test_save_run_writes_truncation_and_sampling(tmp_path):
     run.results = [tr, TaskResult(task_id="t2", difficulty="easy")]
     run.environment = {"execution": "local",
                        "sampling": {"temperature": 0.2, "seed": None,
-                                    "reproducible": False}}
+                                    "seed_sent": False}}
     json_path, _ = save_run(run, tmp_path)
     payload = json.loads(Path(json_path).read_text(encoding="utf-8"))
     assert payload["summary"]["n_truncated"] == 1
@@ -253,7 +253,7 @@ def test_save_run_writes_truncation_and_sampling(tmp_path):
     assert row["truncated"] is True
     assert row["finish_reason"] == "length"
     assert row["max_tokens"] == 49152
-    assert payload["environment"]["sampling"]["reproducible"] is False
+    assert payload["environment"]["sampling"]["seed_sent"] is False
 
 
 # ────────────────── ④ 再生成ゲート ──────────────────

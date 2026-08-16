@@ -474,8 +474,10 @@ def check_effective(report: PreflightReport, *, cfg_raw: dict, payload: dict,
         report.add(
             "WARN", "effective", "seed",
             "seed 未指定です。llama-server の既定は seed=-1（毎回ランダム）なので、"
-            "このランは後から再現・検証できません",
-            reproducible=False,
+            "このランは後から再現・検証できません"
+            "（なお seed を指定しても完全な再現は保証されません。実測で"
+            "6問中1問が同一条件の再走で分岐しました）",
+            seed_sent=False,
         )
 
     # max_tokens が n_ctx を食い切っていないか

@@ -46,8 +46,23 @@ def sampling_of(client) -> dict:
     """クライアントの**実効**サンプリング設定を返す (results.json 記録用).
 
     runs>1 で温度を実行時に上書きしたあとに呼ぶこと (上書き後の値が入る)。
-    seed が None のランは毎回サンプリングが変わるので reproducible=False。
+
+    ``seed_sent`` は「seed を payload に載せたか」という**事実**だけを表す。
+    かつて ``reproducible`` という名前で出していたが、これは過大な主張だった。
+    実測 (2026-08-16 / Qwen3.8-27B Q5_K_M / seed=42 固定 / 同一 ctx・同一
+    サンプリング) では、同じ6問を条件を変えずに2回走らせて
+
+      ・5問は llm_output.txt がバイト単位で完全一致
+      ・1問 (t095) は **63文字目から分岐**し、判定が NG → OK に反転
+        (完了トークン 23,437 → 29,271)
+
+    となった。llama.cpp の CUDA 実装はバッチ構成やスロット状態が変わると
+    リダクションの順序が変わり、ビット単位では再現しない。近接した logit が
+    1つ入れ替わればそこから先は全部変わる。
+
+    したがって seed の指定は**再現性を高めるが保証はしない**。
+    「同一条件の再走で1問(=16問中6.25pt)動きうる」がノイズ下限の実測値。
     """
     out = {k: getattr(client, k, None) for k in SAMPLING_KEYS}
-    out["reproducible"] = out.get("seed") is not None
+    out["seed_sent"] = out.get("seed") is not None
     return out
