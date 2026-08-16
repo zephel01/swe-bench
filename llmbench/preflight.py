@@ -56,8 +56,10 @@ SUBSTANTIVE_LINE_LEN = 40
 #:   longest_line           69     90   2,339       42,129
 #:   max_char_run            0     20      32        7,930
 #:
-#: 正常帯 (p99) と病的な値のあいだが1〜2桁空いているので、
-#: p99 の 3〜5倍を warn、10〜20倍を fail に置いている。
+#: 正常帯 (p99) と病的な値のあいだが1〜2桁空いているので、しきい値は
+#:   warn = 「そのランに、全体の上位1%に入るタスクが1つでもある」水準 (p99 の 0.9〜3倍)
+#:   fail = 「正常帯から1桁外れている」水準 (p99 の 3〜16倍)
+#: に置いている。倍率が指標ごとに違うのは、分布の裾の厚みが違うため。
 #: **中央値では縮退は見えない。テールでしか見えない**ので、
 #: 判定は必ず「ランの最悪タスク」に対して行う (平均を取ってはいけない)。
 THRESHOLDS: dict[str, tuple[float, float]] = {
@@ -261,22 +263,40 @@ def normalize_generation_config(gc: dict) -> dict:
     return out
 
 
-def resolve_repo_id(model_name: str, cfg: dict, run_cfg: dict | None = None) -> str | None:
+def resolve_repo_id(model_name: str, cfg: dict, run_cfg: dict | None = None,
+                    live_model_path: str | None = None) -> str | None:
     """モデル設定から HuggingFace repo id を解決する.
 
-    優先順: models.<name>.hf_repo > run.hf_repo_map の前方一致 > None。
-    **パス名からの推測はしない** (誤った推奨値を当てるほうが害が大きい)。
+    優先順:
+      1. ``models.<name>.hf_repo``（明示指定）
+      2. ``run.hf_repo_map`` の前方一致。照合するパスは
+         **サーバが実際にロードしている GGUF のパス**（``live_model_path``）を
+         最優先で使う。``model: "auto"`` 運用では config に model_path が
+         書かれないため、config だけ見ても解決できない。
+      3. config の ``model_path`` / ``model``
+
+    **パス名からの推測はしない**（誤った推奨値を当てるほうが害が大きい）。
     """
     direct = cfg.get("hf_repo")
     if direct:
         return str(direct)
     mapping = (run_cfg or {}).get("hf_repo_map") or {}
-    model_path = str(cfg.get("model_path") or cfg.get("model") or "")
+    if not mapping:
+        return None
+    candidates = [live_model_path,
+                  cfg.get("model_path"),
+                  cfg.get("model")]
     best: tuple[int, str] | None = None
-    for prefix, repo in mapping.items():
-        if model_path.startswith(str(prefix)):
-            if best is None or len(str(prefix)) > best[0]:
-                best = (len(str(prefix)), str(repo))
+    for cand in candidates:
+        if not cand:
+            continue
+        cand = str(cand)
+        for prefix, repo in mapping.items():
+            if cand.startswith(str(prefix)):
+                if best is None or len(str(prefix)) > best[0]:
+                    best = (len(str(prefix)), str(repo))
+        if best:            # 優先度の高い候補で当たったらそこで確定
+            break
     return best[1] if best else None
 
 
@@ -599,6 +619,7 @@ def run_preflight(config: dict, model_name: str | None, *,
 
         # --- サーバ既定 / 起動引数
         server_defaults, launch, n_ctx = {}, {}, None
+        live_model_path: str | None = None
         base_url = getattr(client, "base_url", "")
         if base_url:
             try:
@@ -609,12 +630,22 @@ def run_preflight(config: dict, model_name: str | None, *,
                 if isinstance(props, dict):
                     gen = props.get("default_generation_settings") or {}
                     n_ctx = gen.get("n_ctx") or props.get("n_ctx")
+                    # ロード中モデルの実パス。model: "auto" 運用ではこれが唯一の手がかり
+                    live_model_path = (props.get("model_path")
+                                       or gen.get("model") or None)
                 pid = env_mod.find_server_pid(env_mod._port_of(base_url))
                 if pid:
                     launch = env_mod.parse_server_args(env_mod._proc_argv(pid))
             except Exception:
                 pass
 
+        if not server_defaults and not launch:
+            report.add(
+                "INFO", "effective", "-",
+                f"{base_url} に接続できず、サーバ既定(/props)と起動引数を"
+                "照合できませんでした。**llama-server を起動した状態で実行すると"
+                "検査が増えます**（n_ctx との突き合わせなど）",
+            )
         class_defaults = {"temperature": 0.2, "max_tokens": 4096}
         check_effective(report, cfg_raw=cfg_raw, payload=payload,
                         server_defaults=server_defaults, launch=launch,
@@ -622,7 +653,8 @@ def run_preflight(config: dict, model_name: str | None, *,
 
         # --- 公式推奨
         recommended, source = {}, ""
-        repo_id = resolve_repo_id(model_name, cfg_raw, run_cfg)
+        repo_id = resolve_repo_id(model_name, cfg_raw, run_cfg,
+                                  live_model_path=live_model_path)
         if repo_id:
             gc = fetch_generation_config(repo_id, offline=offline)
             if gc:

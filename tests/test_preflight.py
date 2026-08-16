@@ -100,6 +100,38 @@ def test_resolve_repo_id_never_guesses():
     assert resolve_repo_id("n", {"model_path": "/m/Qwen3.8-27B-Q4_K_M.gguf"}, {}) is None
 
 
+def test_resolve_repo_id_uses_live_model_path():
+    """model: "auto" 運用では config に model_path が無い。
+    サーバがロード中の GGUF パス (/props) から解決できること."""
+    run = {"hf_repo_map": {"/mnt/data/models/Qwen3.8-27B-GGUF/": "unsloth/Qwen3.8-27B-GGUF"}}
+    cfg = {"model": "auto"}
+    assert resolve_repo_id("n", cfg, run) is None            # config だけでは解決できない
+    assert resolve_repo_id(
+        "n", cfg, run,
+        live_model_path="/mnt/data/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf",
+    ) == "unsloth/Qwen3.8-27B-GGUF"
+
+
+def test_resolve_repo_id_live_path_beats_config():
+    """実際にロードされているファイルの方を優先する."""
+    run = {"hf_repo_map": {
+        "/mnt/data/models/self/": "self/made",
+        "/mnt/data/models/Qwen3.8-27B-GGUF/": "unsloth/Qwen3.8-27B-GGUF",
+    }}
+    cfg = {"model_path": "/mnt/data/models/self/old.gguf"}
+    assert resolve_repo_id(
+        "n", cfg, run,
+        live_model_path="/mnt/data/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q6_K.gguf",
+    ) == "unsloth/Qwen3.8-27B-GGUF"
+
+
+def test_resolve_repo_id_explicit_beats_everything():
+    assert resolve_repo_id(
+        "n", {"hf_repo": "Qwen/Qwen3.8-27B", "model": "auto"},
+        {"hf_repo_map": {"/x/": "other/repo"}}, live_model_path="/x/y.gguf",
+    ) == "Qwen/Qwen3.8-27B"
+
+
 # ------------------------------------------------------------ B: 三点照合
 
 

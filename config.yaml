@@ -217,6 +217,17 @@ models:
     mode: broken
 
 run:
+  # ── 公式推奨サンプリングの照合先 (llmbench preflight が使う) ──
+  # GGUF のパス前方一致 → HuggingFace リポジトリ。preflight はここから
+  # generation_config.json / data/recommended_sampling.yaml を引いて、
+  # 実効設定とのズレを走らせる前に検出する。
+  # ⚠️ model: "auto" で運用しているので、照合に使うパスは **サーバが実際に
+  #    ロードしている GGUF** (/props の model_path) から取る。config には
+  #    書かれないため、ここを埋めないと A の照合がスキップされる。
+  hf_repo_map:
+    /mnt/data/models/Qwen3.8-27B-GGUF/: unsloth/Qwen3.8-27B-GGUF
+    /mnt/data/models/Qwen3.8-27B/: Qwen/Qwen3.8-27B      # 自作量子化を置いていた場所
+
   issue_lang: en          # en | ja  (language tax検証はjaに切替えて再実行)
   test_timeout: 120       # pytest実行のタイムアウト(秒/タスク)
   generate_retries: 1     # パース失敗時の再生成回数 (--generate-retries で上書き可)
