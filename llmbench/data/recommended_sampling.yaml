@@ -1,0 +1,64 @@
+# モデル公式の推奨サンプリング（オフライン用テーブル）
+#
+# preflight は次の順で推奨値を探します。
+#   1. models.<name>.hf_repo で指定した HuggingFace リポジトリの generation_config.json
+#   2. このファイル（1が取れない／thinking と non-thinking で値が違う場合）
+#
+# generation_config.json に載らない情報（thinking / non-thinking の出し分け、
+# presence_penalty の推奨など）はモデルカードの本文にしか書かれていないことが多いので、
+# **読んだら必ずここに書き写してください。** 書き写した時点で二度と同じ事故は起きません。
+#
+# 記入ルール:
+#   - source には実際に読んだURLを必ず書く（後から検証できるように）
+#   - 確認していない値は書かない（空欄のほうが害が小さい）
+#   - 追記したら `llmbench preflight --model <name>` で当たることを確認する
+
+models:
+  # 2026-08-16 時点。https://huggingface.co/Qwen/Qwen3.8-27B のモデルカード記載値。
+  Qwen/Qwen3.8-27B:
+    default_mode: thinking
+    source: https://huggingface.co/Qwen/Qwen3.8-27B
+    checked: 2026-08-16
+    modes:
+      thinking:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+      non-thinking:
+        temperature: 0.7
+        top_p: 0.80
+        top_k: 20
+        presence_penalty: 1.5
+
+  # unsloth の GGUF 配布リポジトリは本家と同じ推奨値を使う。
+  # hf_repo に GGUF 側を書いている場合のためにエイリアスを置いておく。
+  unsloth/Qwen3.8-27B-GGUF:
+    default_mode: thinking
+    source: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
+    checked: 2026-08-16
+    modes:
+      thinking:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+      non-thinking:
+        temperature: 0.7
+        top_p: 0.80
+        top_k: 20
+        presence_penalty: 1.5
+
+  # ---- ここから下は各自で追記してください ----
+  #
+  # 例:
+  # SomeOrg/SomeModel-12B:
+  #   default_mode: non-thinking
+  #   source: https://huggingface.co/SomeOrg/SomeModel-12B
+  #   checked: 2026-08-16
+  #   modes:
+  #     non-thinking:
+  #       temperature: 0.6
+  #       top_p: 0.9
+  #       top_k: 40
+  #       min_p: 0.05

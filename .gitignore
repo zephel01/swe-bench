@@ -25,3 +25,7 @@ _OUTPUTS/
 .DS_Store
 
 _to_delete/
+
+# config
+config.yaml.*
+config.yaml
