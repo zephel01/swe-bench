@@ -66,7 +66,7 @@ models:
   glm-coding:
     type: openai
     base_url: "https://api.z.ai/api/coding/paas/v4"   # Coding Plan専用のOpenAI互換パス
-    model: "glm-4.7"                 # 代替: glm-4.7
+    model: "glm-5.2"                 # 代替: glm-4.7
     api_key: "${ZAI_API_KEY}"
     temperature: 0.2
     max_tokens: 24576
