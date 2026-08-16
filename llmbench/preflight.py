@@ -474,8 +474,11 @@ def check_effective(report: PreflightReport, *, cfg_raw: dict, payload: dict,
         report.add(
             "WARN", "effective", "seed",
             "seed 未指定です。llama-server の既定は seed=-1（毎回ランダム）なので、"
-            "このランは後から再現・検証できません",
-            reproducible=False,
+            "このランは後から再現・検証できません"
+            "（seed を指定すれば、同じタスク集合を同じ順序で回す限りは"
+            "実測でビット単位まで再現します。ただしタスク集合を変えると"
+            "KVキャッシュの残り方が変わるので再現しません）",
+            seed_sent=False,
         )
 
     # max_tokens が n_ctx を食い切っていないか
