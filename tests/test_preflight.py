@@ -132,6 +132,70 @@ def test_resolve_repo_id_explicit_beats_everything():
     ) == "Qwen/Qwen3.8-27B"
 
 
+# ------------------------------------------------------------ OS差の耐性
+
+
+def test_marks_fall_back_to_ascii_on_legacy_console():
+    """Windows の cp932 コンソールでは絵文字を出せない。
+    フォールバックしないと UnicodeEncodeError で preflight ごと落ちる."""
+    class Cp932: encoding = "cp932"
+    class Utf8: encoding = "utf-8"
+    class NoEnc: encoding = None
+    from llmbench.preflight import _marks, _LEVEL_MARK_ASCII, _LEVEL_MARK
+    assert _marks(Cp932()) is _LEVEL_MARK_ASCII
+    assert _marks(NoEnc()) is _LEVEL_MARK_ASCII
+    assert _marks(Utf8()) is _LEVEL_MARK
+
+
+def test_render_is_encodable_on_legacy_console():
+    from llmbench.preflight import _LEVEL_MARK_ASCII
+    r = PreflightReport(model="m")
+    for lv in ("OK", "INFO", "WARN", "FAIL"):
+        r.add(lv, "effective", "k", "msg")
+    out = r.render(marks=_LEVEL_MARK_ASCII)
+    out.encode("cp932")          # 例外が出ないこと
+    assert "[FAIL]" in out and "[ OK ]" in out
+
+
+def test_resolve_repo_id_windows_path_separators():
+    """Windows のパス (バックスラッシュ・ドライブレター) でも前方一致する."""
+    run = {"hf_repo_map": {"D:/models/Qwen3.8-27B-GGUF/": "unsloth/Qwen3.8-27B-GGUF"}}
+    assert resolve_repo_id(
+        "n", {"model": "auto"}, run,
+        live_model_path=r"D:\models\Qwen3.8-27B-GGUF\Qwen3.8-27B-Q4_K_M.gguf",
+    ) == "unsloth/Qwen3.8-27B-GGUF"
+
+
+def test_resolve_repo_id_prefix_written_with_backslashes():
+    """config 側がバックスラッシュで書かれていても当たること."""
+    run = {"hf_repo_map": {r"D:\models\Qwen3.8-27B-GGUF": "unsloth/Qwen3.8-27B-GGUF"}}
+    assert resolve_repo_id(
+        "n", {"model": "auto"}, run,
+        live_model_path="D:/models/Qwen3.8-27B-GGUF/x.gguf",
+    ) == "unsloth/Qwen3.8-27B-GGUF"
+
+
+def test_default_cache_dir_respects_env(monkeypatch, tmp_path):
+    from llmbench import preflight as pf
+    monkeypatch.setenv("LLMBENCH_CACHE", str(tmp_path / "custom"))
+    assert pf._default_cache_dir() == tmp_path / "custom"
+    monkeypatch.delenv("LLMBENCH_CACHE")
+    monkeypatch.setattr(pf.os, "name", "posix")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert pf._default_cache_dir() == tmp_path / "xdg" / "llmbench"
+
+
+def test_scan_handles_crlf_and_broken_encoding(tmp_path):
+    """Windows で作られた CRLF / 壊れたバイト列でも落ちないこと."""
+    art = tmp_path / "run_artifacts"
+    (art / "t001").mkdir(parents=True)
+    (art / "t001" / "llm_output.txt").write_bytes(
+        b"def f():\r\n    return 1\r\n" + b"\xff\xfe invalid \x80\n")
+    scan = scan_artifacts(art)
+    assert "t001" in scan["tasks"]
+    assert scan["worst"]["max_char_run"]["level"] == "OK"
+
+
 # ------------------------------------------------------------ B: 三点照合
 
 

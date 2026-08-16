@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -75,6 +76,49 @@ _RECOMMENDED_FILE = _DATA_DIR / "recommended_sampling.yaml"
 
 _LEVEL_ORDER = {"OK": 0, "INFO": 1, "WARN": 2, "FAIL": 3}
 _LEVEL_MARK = {"OK": "✅", "INFO": "  ", "WARN": "⚠️ ", "FAIL": "❌"}
+#: 絵文字を出せないコンソール用 (Windows の cp932/cp437 等)。
+#: ここでフォールバックしないと UnicodeEncodeError で preflight ごと落ちる。
+_LEVEL_MARK_ASCII = {"OK": "[ OK ]", "INFO": "[ -- ]", "WARN": "[WARN]", "FAIL": "[FAIL]"}
+
+
+def _marks(stream=None) -> dict:
+    """出力先が絵文字を表現できるかを見てマーカーを選ぶ."""
+    stream = stream if stream is not None else sys.stdout
+    enc = getattr(stream, "encoding", None)
+    if not enc:
+        return _LEVEL_MARK_ASCII
+    try:
+        "".join(_LEVEL_MARK.values()).encode(enc)
+    except (UnicodeEncodeError, LookupError):
+        return _LEVEL_MARK_ASCII
+    return _LEVEL_MARK
+
+
+def _norm_path(value) -> str:
+    """パス比較用の正規化.
+
+    Windows は区切りが ``\\`` で大文字小文字を区別しない。macOS も既定では
+    区別しない。前方一致でリポジトリを引くだけなので、区切りを ``/`` に
+    寄せたうえで、区別しないOSでは小文字化して比較する。
+    """
+    text = str(value).replace("\\", "/")
+    if os.name == "nt" or sys.platform == "darwin":
+        text = text.lower()
+    return text
+
+
+def _default_cache_dir() -> Path:
+    """OSの作法に沿ったキャッシュ置き場を返す."""
+    env = os.environ.get("LLMBENCH_CACHE")
+    if env:
+        return Path(env)
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / "llmbench"
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        return Path(xdg) / "llmbench"
+    return Path.home() / ".cache" / "llmbench"
 
 
 # ---------------------------------------------------------------- データ構造
@@ -147,7 +191,8 @@ class PreflightReport:
             "degeneration": self.degeneration,
         }
 
-    def render(self) -> str:
+    def render(self, marks: dict | None = None) -> str:
+        mark = marks or _marks()
         lines: list[str] = []
         head = f"preflight: {self.model or '(model指定なし)'}"
         lines.append(head)
@@ -172,7 +217,7 @@ class PreflightReport:
             lines.append(titles[check])
             lines.append("-" * len(titles[check]))
             for f in sorted(items, key=lambda x: -_LEVEL_ORDER[x.level]):
-                lines.append(f"  {_LEVEL_MARK[f.level]} [{f.key}] {f.message}")
+                lines.append(f"  {mark[f.level]} [{f.key}] {f.message}")
         lines.append("")
         lines.append(f"判定: {self.worst}")
         return "\n".join(lines)
@@ -220,8 +265,8 @@ def fetch_generation_config(repo_id: str, *, cache_dir: Path | None = None,
     ネットワークを使うのはここだけ。``offline=True`` ならキャッシュのみ。
     取得できなければ None (呼び出し側は同梱テーブルへフォールバックする)。
     """
-    cache_dir = Path(cache_dir or os.environ.get(
-        "LLMBENCH_CACHE", Path.home() / ".cache" / "llmbench")) / "genconfig"
+    cache_dir = Path(cache_dir) if cache_dir else _default_cache_dir()
+    cache_dir = cache_dir / "genconfig"
     safe = repo_id.replace("/", "__")
     cached = cache_dir / f"{safe}.json"
     if cached.exists():
@@ -300,11 +345,12 @@ def resolve_repo_id(model_name: str, cfg: dict, run_cfg: dict | None = None,
     for cand in candidates:
         if not cand:
             continue
-        cand = str(cand)
+        cand_n = _norm_path(cand)
         for prefix, repo in mapping.items():
-            if cand.startswith(str(prefix)):
-                if best is None or len(str(prefix)) > best[0]:
-                    best = (len(str(prefix)), str(repo))
+            pre_n = _norm_path(prefix)
+            if cand_n.startswith(pre_n):
+                if best is None or len(pre_n) > best[0]:
+                    best = (len(pre_n), str(repo))
         if best:            # 優先度の高い候補で当たったらそこで確定
             break
     return best[1] if best else None
@@ -672,6 +718,13 @@ def run_preflight(config: dict, model_name: str | None, *,
                 except Exception:
                     pass
 
+            if server_defaults and not launch:
+                report.add(
+                    "INFO", "effective", "-",
+                    "サーバ既定(/props)は取得できましたが、起動引数(argv)は読めませんでした。"
+                    "**llama-server が別マシンで動いている**か、このOSではプロセス引数を"
+                    "取得できません。起動引数との突き合わせだけがスキップされます",
+                )
             if not server_defaults and not launch:
                 report.add(
                     "INFO", "effective", "-",
