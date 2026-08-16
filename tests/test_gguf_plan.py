@@ -271,6 +271,27 @@ def test_non_thinking_template_gets_different_sampling():
     assert "top_p: 0.8" in out
 
 
+def test_max_tokens_reason_is_honest_about_which_limit_applied():
+    """ctx 131,072 で 49,152 を出しながら「ctx の 3/4」と書くのは嘘（実バグ）.
+
+    3/4 は 98,304。効いたのは上限のほうなので、そう書かないといけない。
+    """
+    mt, reason = gguf_plan.max_tokens_for(131072)
+    assert mt == gguf_plan.MAX_TOKENS_CAP
+    assert "3/4" in reason and "頭打ち" in reason
+    assert "98,304" in reason          # 3/4 が実際いくつだったかも出す
+
+    mt, reason = gguf_plan.max_tokens_for(32768)
+    assert mt == 24576                 # こちらは 3/4 が効いている
+    assert "3/4" in reason and "頭打ち" not in reason
+
+
+def test_max_tokens_reason_appears_in_the_emitted_config():
+    out = emit(Q5_K_M, ctx=131072, kv="q8_0")
+    assert "max_tokens: 49152" in out
+    assert "ctx 131,072 の 3/4" not in out      # ← これが出ていたら嘘
+
+
 def test_max_tokens_leaves_room_for_the_prompt():
     for ctx in (32768, 65536, 131072):
         out = emit(Q5_K_M, ctx=ctx)
