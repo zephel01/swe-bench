@@ -57,6 +57,8 @@ STANDARD_CTX = (4096, 8192, 16384, 32768, 49152, 65536, 98304,
                 131072, 196608, 262144, 393216, 524288, 1048576)
 #: 余りがこれを下回るときは警告する (GiB)
 MIN_HEADROOM_GIB = 0.5
+#: max_tokens の上限。thinking モデルでもこれ以上は要らない (実測での運用値)
+MAX_TOKENS_CAP = 49152
 
 THINKING_SAMPLING = {
     "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0,
@@ -124,6 +126,25 @@ def model_path_of(rec: dict, override: str | None) -> str:
     return rec.get("path") or f"/path/to/{rec['file']}"
 
 
+def max_tokens_for(ctx: int) -> tuple[int, str]:
+    """``max_tokens`` と、**その値になった理由**を返す.
+
+    2つの制約の小さいほうを採る。
+
+      * ctx の 3/4 … 残りをプロンプトに使う。max_tokens >= n_ctx にすると
+        実効上限が n_ctx − プロンプト長になり、max_tokens が効かなくなる
+      * MAX_TOKENS_CAP … thinking モデルでもこれ以上は要らない実測値
+
+    **どちらが効いたかを言い分けること。**ctx 131,072 で 49,152 を出しながら
+    「ctx の 3/4」と書くと嘘になる (3/4 は 98,304)。
+    """
+    three_quarters = (ctx * 3 // 4) // 1024 * 1024
+    if three_quarters <= MAX_TOKENS_CAP:
+        return three_quarters, f"ctx {ctx:,} の 3/4。残りはプロンプト用"
+    return MAX_TOKENS_CAP, (f"上限 {MAX_TOKENS_CAP:,} で頭打ち "
+                            f"(ctx の 3/4 なら {three_quarters:,})")
+
+
 def short(rec: dict) -> str:
     return rec["file"].replace(".gguf", "")
 
@@ -166,8 +187,7 @@ def emit_config(rec: dict, ctx: int, kv_mode: str, vram: float, overhead: float,
     samp = THINKING_SAMPLING if think else NON_THINKING_SAMPLING
     mtp = bool(rec.get("mtp_tensor_count"))
     used = file_gib(rec) + kv_gib(rec, ctx, kv_mode) + overhead
-    # max_tokens は ctx の 3/4 を上限に。プロンプト分を残す
-    max_tokens = min(49152, (ctx * 3 // 4) // 1024 * 1024)
+    max_tokens, mt_reason = max_tokens_for(ctx)
 
     L = []
     L.append(f"# ===== {short(rec)} / ctx {ctx:,} / KV {kv_mode} =====")
@@ -223,7 +243,7 @@ def emit_config(rec: dict, ctx: int, kv_mode: str, vram: float, overhead: float,
     L.append('    api_key: "sk-local"')
     for k, v in samp.items():
         L.append(f"    {k}: {v}")
-    L.append(f"    max_tokens: {max_tokens}   # ctx {ctx:,} の 3/4。プロンプト分を残す")
+    L.append(f"    max_tokens: {max_tokens}   # {mt_reason}")
     L.append("    seed: 42          # runs: 1 のときだけ書く (runs>1 は毎回ランダムにする)")
     tag = "thinking" if think else "non-thinking"
     L.append(f"    # サンプリングは chat_template の判定 ({tag}) に基づく既定値")
