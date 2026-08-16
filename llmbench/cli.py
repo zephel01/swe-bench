@@ -5,6 +5,7 @@
     llmbench models                                  # config定義 + Ollama稼働モデル
     llmbench run --model local-ollama
     llmbench run --model local-openai --tasks t001,t003 --lang ja
+    llmbench preflight --model local-openai          # 走らせる前に設定を照合
     llmbench validate                                # gold/brokenモックで自己検証
     llmbench certify results/<stamp>_<model>_results.json      # 使えるライン判定
     llmbench certify --merge results/base.json results/l7.json # 分割実行を統合判定
@@ -14,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -283,6 +285,32 @@ def cmd_validate(args) -> int:
     return 0 if passed else 1
 
 
+def cmd_preflight(args) -> int:
+    """走らせる前に「設定が本当に効いているか」を照合する.
+
+    A. 公式推奨サンプリングとの差分
+    B. config / 実payload / サーバ既定(/props) / 起動引数 の三点照合
+    C. 既存 artifacts の縮退指数 (--scan)
+
+    どれも生成を行わないので GPU 時間はかからない。
+    """
+    from .preflight import run_preflight
+
+    config = {}
+    if args.model:
+        config = _load_config(args.config)
+    report = run_preflight(
+        config, args.model,
+        artifacts=args.scan, results_json=args.results,
+        offline=args.offline,
+    )
+    if args.json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(report.render())
+    return report.exit_code(strict=args.strict)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="llmbench",
@@ -365,6 +393,25 @@ def main() -> None:
              "(分割実行した base40 + L6 等の統合認証。task_id重複は後勝ち)",
     )
     p_cert.set_defaults(fn=cmd_certify)
+
+    p_pre = sub.add_parser(
+        "preflight",
+        help="走らせる前の設定照合 (公式推奨との差分 / 実効値 / 縮退指数)",
+    )
+    p_pre.add_argument("--config", default="config.yaml")
+    p_pre.add_argument("--model", default=None,
+                       help="照合するモデル名 (省略時は --scan だけ実行)")
+    p_pre.add_argument("--scan", default=None,
+                       help="縮退指数を出す artifacts ディレクトリ")
+    p_pre.add_argument("--results", default=None,
+                       help="打ち切り率の集計に使う results.json "
+                            "(省略時は --scan の隣から推測)")
+    p_pre.add_argument("--offline", action="store_true",
+                       help="HuggingFace を見に行かず、キャッシュと同梱テーブルだけを使う")
+    p_pre.add_argument("--strict", action="store_true",
+                       help="WARN でも exit 1 にする (CI 用)")
+    p_pre.add_argument("--json", action="store_true", help="JSON で出力")
+    p_pre.set_defaults(fn=cmd_preflight)
 
     args = parser.parse_args()
     sys.exit(args.fn(args))
