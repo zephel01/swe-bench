@@ -110,6 +110,8 @@ class PreflightReport:
     server_defaults: dict = field(default_factory=dict)
     launch: dict = field(default_factory=dict)
     degeneration: dict = field(default_factory=dict)
+    live_model_path: str | None = None
+    repo_id: str | None = None
 
     def add(self, level: str, check: str, key: str, message: str, **detail) -> None:
         self.findings.append(Finding(level, check, key, message, detail))
@@ -136,6 +138,8 @@ class PreflightReport:
             "effective": self.effective,
             "recommended": self.recommended,
             "recommended_source": self.recommended_source,
+            "live_model_path": self.live_model_path,
+            "repo_id": self.repo_id,
             "server_defaults": self.server_defaults,
             "launch": self.launch,
             "degeneration": self.degeneration,
@@ -304,15 +308,21 @@ def resolve_repo_id(model_name: str, cfg: dict, run_cfg: dict | None = None,
 
 
 def check_recommended(report: PreflightReport, effective: dict, recommended: dict,
-                      *, source: str = "") -> None:
-    """公式推奨サンプリングと実効設定を突き合わせる."""
+                      *, source: str = "", diagnostic: str = "") -> None:
+    """公式推奨サンプリングと実効設定を突き合わせる.
+
+    ``diagnostic`` には「何を見て解決に失敗したか」を渡す。
+    「設定してください」とだけ言われても、どのパスがどの前方一致に
+    当たらなかったのかが分からないと直しようがない。
+    """
     report.recommended = dict(recommended)
     report.recommended_source = source
     if not recommended:
         report.add(
             "WARN", "recommended", "-",
             "公式推奨値を取得できませんでした。"
-            "models.<name>.hf_repo を設定するか data/recommended_sampling.yaml に追記してください",
+            "models.<name>.hf_repo を設定するか data/recommended_sampling.yaml に追記してください"
+            + (f"\n       {diagnostic}" if diagnostic else ""),
         )
         return
     for key, rec in recommended.items():
@@ -655,6 +665,8 @@ def run_preflight(config: dict, model_name: str | None, *,
         recommended, source = {}, ""
         repo_id = resolve_repo_id(model_name, cfg_raw, run_cfg,
                                   live_model_path=live_model_path)
+        report.live_model_path = live_model_path
+        report.repo_id = repo_id
         if repo_id:
             gc = fetch_generation_config(repo_id, offline=offline)
             if gc:
@@ -669,7 +681,27 @@ def run_preflight(config: dict, model_name: str | None, *,
             if vals:
                 recommended = dict(vals)
                 source = f"{_RECOMMENDED_FILE.name}: {key} / {mode}"
-        check_recommended(report, effective, recommended, source=source)
+
+        # 解決に失敗したときは「何を見たか」を必ず出す
+        diag = ""
+        if not recommended:
+            seen = live_model_path or cfg_raw.get("model_path") or cfg_raw.get("model")
+            prefixes = list((run_cfg.get("hf_repo_map") or {}).keys())
+            parts = [f"照合に使ったパス: {seen!r}"]
+            if live_model_path is None:
+                parts.append("(サーバから取得できず。llama-server を起動して実行するか "
+                             "models.<name>.hf_repo を明示してください)")
+            if prefixes:
+                parts.append(f"run.hf_repo_map の前方一致候補: {prefixes}")
+            else:
+                parts.append("run.hf_repo_map が未設定です")
+            if repo_id:
+                parts.append(f"→ repo_id={repo_id} は解決できたが推奨値が引けませんでした "
+                             "(オフライン or テーブル未登録)")
+            diag = " / ".join(parts)
+
+        check_recommended(report, effective, recommended, source=source,
+                          diagnostic=diag)
 
     if artifacts:
         scan = scan_artifacts(Path(artifacts), results_json=(
