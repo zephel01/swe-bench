@@ -278,15 +278,25 @@ def test_extraction_suspect_flags_warnings_and_errors():
 
 
 class _CountingClient:
-    """呼ばれた回数を数えるだけのクライアント."""
+    """呼ばれた回数を数えるだけのクライアント.
 
-    def __init__(self):
+    ``truncated`` は既定 False。打ち切られた生成は再生成ゲートを
+    通らない (作り直しても同じ壁に当たるだけなので即座に抜ける) ため、
+    ゲートそのものを試すテストでは False にしておく必要がある。
+    """
+
+    def __init__(self, truncated: bool = False, text: str = "x"):
         self.calls = 0
+        self.truncated = truncated
+        self.text = text
 
     def generate(self, system, user):
         self.calls += 1
-        return GenerationResult(text="x", latency_sec=0.1, truncated=True,
-                                finish_reason="length", max_tokens=100)
+        return GenerationResult(
+            text=self.text, latency_sec=0.1, truncated=self.truncated,
+            finish_reason="length" if self.truncated else "stop",
+            max_tokens=100,
+        )
 
 
 class _Grader:
@@ -308,9 +318,34 @@ def test_regeneration_gate_retries_on_suspect_extraction():
     grader = _Grader(_Ev(True, parse_warnings=["placeholder path dropped"]))
     at = r._one_attempt(client, grader, "s", "u", None, None, retries=2)
     assert client.calls == 3          # 1 + retries、無限ループしない
+    assert at.finish_reason == "stop"
+    assert at.max_tokens == 100
+
+
+def test_truncation_fields_propagate_to_attempt():
+    """打ち切りフラグが Attempt まで届く (results.json に残る根拠)."""
+    r = _runner()
+    client = _CountingClient(truncated=True)
+    at = r._one_attempt(client, _Grader(_Ev(True)), "s", "u", None, None,
+                        retries=2)
     assert at.truncated is True
     assert at.finish_reason == "length"
     assert at.max_tokens == 100
+
+
+def test_truncated_generation_is_not_regenerated():
+    """打ち切られた生成は作り直さない.
+
+    パース失敗の原因が「途中で切れた」ことにある以上、同じ max_tokens で
+    引き直しても同じ壁に当たるだけ。1回あたり max_tokens 分の時間
+    (49,152tok なら約150秒) を捨てるので、ここで止める。
+    """
+    r = _runner()
+    client = _CountingClient(truncated=True)
+    at = r._one_attempt(client, _Grader(_Ev(False, parse_error="no blocks")),
+                        "s", "u", None, None, retries=3)
+    assert client.calls == 1, "打ち切り後に再生成している"
+    assert at.truncated is True
 
 
 def test_regeneration_gate_stops_on_clean_extraction():

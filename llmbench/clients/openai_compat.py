@@ -33,6 +33,74 @@ _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 # Retry-After が桁外れの値を返してきたときの上限 (秒)
 _MAX_RETRY_AFTER = 120.0
 
+# ── 思考(reasoning)暴走ガードの既定値 ────────────────────────────────
+# 背景: 思考モデル (Qwen3.8 系 GGUF など) は難問で縮退ループに落ちることがある。
+#   実測: content が空のまま reasoning_content だけが伸び続け、
+#         "1,1,1,1,..." を1行 15,434 文字 / 同一文を 1,552 行 のように
+#         同じ断片を反復したまま max_tokens (49,152) に到達する。
+#   このとき生成は必ず失敗するのに、1回あたり max_tokens 分の時間を丸ごと
+#   消費する (49,152tok @ 330tok/s ≒ 150秒)。runs=5 × generate_retries=1 なら
+#   1タスクで最大10回 = 25分。frontier 帯が続くとランが実質止まって見える。
+# 対策: ストリーミング中に「まだ本文が1文字も出ていない」状態に限り、
+#   反復を検出した時点で接続を切る。本文が出始めた生成は絶対に止めない。
+_LOOP_GUARD_MIN_CHARS = 8000      # これ未満の思考は判定しない (正常な長考を殺さない)
+_LOOP_GUARD_INTERVAL = 4000       # 何文字進むごとに判定するか
+_LOOP_GUARD_TAIL = 3000           # 末尾何文字を検査対象にするか
+_LOOP_GUARD_MAX_PERIOD = 400      # 反復単位の最大長 (これより長い周期は見ない)
+_LOOP_GUARD_MIN_REPEATS = 6       # 何回連続で繰り返したらループとみなすか
+_LOOP_GUARD_MIN_LINES = 20        # 行反復判定に必要な最小行数
+_LOOP_GUARD_DUP_LINE_RATIO = 0.8  # 重複行の割合がこれ以上ならループとみなす
+
+# 打ち切り理由 (finish_reason に入れる合成値)。サーバ由来の値
+# (stop/length/...) と衝突しないよう llmbench 独自の接頭辞を付ける。
+FINISH_REASONING_LOOP = "llmbench:reasoning_loop"
+FINISH_REASONING_BUDGET = "llmbench:reasoning_budget"
+
+
+def find_repeating_unit(
+    tail: str,
+    max_period: int = _LOOP_GUARD_MAX_PERIOD,
+    min_repeats: int = _LOOP_GUARD_MIN_REPEATS,
+) -> str | None:
+    """``tail`` の末尾が短い単位の完全反復なら、その単位を返す (無ければ None).
+
+    "1,1,1,1,..." のようなトークン単位のループも、同一文の行単位ループも
+    同じ判定で拾える。周期 p を短い順に試し、末尾 p*min_repeats 文字が
+    単位の単純な繰り返しになっているかだけを見る。
+    """
+    n = len(tail)
+    if n < min_repeats:
+        return None
+    for p in range(1, min(max_period, n // min_repeats) + 1):
+        unit = tail[-p:]
+        if tail[-p * min_repeats:] == unit * min_repeats:
+            return unit
+    return None
+
+
+def duplicate_line_ratio(tail: str, min_lines: int = _LOOP_GUARD_MIN_LINES) -> float:
+    """``tail`` 内の重複行の割合 (0.0〜1.0). 行数が足りなければ 0.0.
+
+    完全反復ではないが同じ文を延々と繰り返しているケースを拾うための、
+    ゆるい第2判定。先頭行は途中で切れている可能性があるので捨てる。
+    """
+    lines = [ln.strip() for ln in tail.splitlines()[1:] if ln.strip()]
+    if len(lines) < min_lines:
+        return 0.0
+    return 1.0 - len(set(lines)) / len(lines)
+
+
+def detect_reasoning_loop(tail: str) -> str | None:
+    """思考テキストの末尾がループしていれば、人間向けの説明文を返す."""
+    unit = find_repeating_unit(tail)
+    if unit is not None:
+        shown = unit if len(unit) <= 40 else unit[:40] + "…"
+        return f"{len(unit)}文字の単位が{_LOOP_GUARD_MIN_REPEATS}回以上反復: {shown!r}"
+    ratio = duplicate_line_ratio(tail)
+    if ratio >= _LOOP_GUARD_DUP_LINE_RATIO:
+        return f"直近の行の{ratio * 100:.0f}%が重複"
+    return None
+
 
 class RetryableHTTPError(RuntimeError):
     """時間を置けば直る見込みのある HTTP エラー (429/5xx)."""
@@ -146,6 +214,25 @@ class OpenAICompatClient(LLMClient):
         # reasoning_effort: 思考モデルの推論予算 (QwenCloud: low/medium/xhigh)。
         # 未指定なら送らない = サーバ既定に従う (qwen3.8-max の既定は xhigh)。
         self.reasoning_effort = cfg.get("reasoning_effort") or None
+        # ── 思考(reasoning)暴走ガード ──────────────────────────────
+        # どちらも「本文(content)がまだ1文字も出ていない」間だけ働く。
+        # 本文が出始めた生成は打ち切らないので、正常な長考は壊さない。
+        #   loop_guard: 反復(縮退ループ)を検出したら即座に接続を切る。既定 ON。
+        #   reasoning_max_tokens: 思考の上限。SSEのdeltaチャンク数を
+        #     トークン数の近似として数える (サーバが複数トークンをまとめて
+        #     送る場合は少なめに数える = ガードが早発しない側に倒れる)。
+        self.loop_guard = bool(cfg.get("loop_guard", True))
+        self.reasoning_max_tokens = _opt(cfg.get("reasoning_max_tokens"), int)
+        if not self.stream and (
+            self.reasoning_max_tokens or "loop_guard" in cfg
+        ):
+            print(
+                f"⚠️ {self.name}: loop_guard / reasoning_max_tokens は "
+                "stream: true のときだけ働きます (非ストリームでは生成が"
+                "終わるまで1バイトも届かないため途中で打ち切れません)。"
+                "config に stream: true を追加してください",
+                file=sys.stderr,
+            )
         # model: auto / 空 のときはサーバのロード中モデルを自動採用する
         raw_model = (
             expand_env(cfg.get("model", ""), where=f"models.{name}.model") or ""
@@ -193,12 +280,23 @@ class OpenAICompatClient(LLMClient):
             payload["stream_options"] = {"include_usage": True}
         return payload
 
-    def _consume_stream(self, resp) -> tuple[str, str, dict, str | None]:
-        """SSE を読み切って (content, reasoning, usage, finish_reason) を返す."""
+    def _consume_stream(self, resp) -> tuple[str, str, dict, str | None, str]:
+        """SSE を読み切って (content, reasoning, usage, finish_reason, abort) を返す.
+
+        ``abort`` は思考暴走ガードが接続を切ったときだけ非空になる
+        (ガードが働かなければ従来どおり空文字)。
+        """
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         usage: dict = {}
         finish_reason: str | None = None
+        abort = ""
+        # ガード用の状態。tail は末尾 _LOOP_GUARD_TAIL 文字だけ持ち回る
+        # (180,000 文字の思考でも毎回フル結合しないため)。
+        tail = ""
+        reasoning_chars = 0
+        reasoning_chunks = 0
+        next_check = _LOOP_GUARD_MIN_CHARS
         for raw_line in resp.iter_lines(decode_unicode=True):
             if not raw_line:
                 continue
@@ -225,15 +323,56 @@ class OpenAICompatClient(LLMClient):
                 )
                 if reasoning:
                     reasoning_parts.append(reasoning)
+                    reasoning_chars += len(reasoning)
+                    reasoning_chunks += 1
+                    tail = (tail + reasoning)[-_LOOP_GUARD_TAIL:]
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
-        return "".join(content_parts), "".join(reasoning_parts), usage, finish_reason
+            # ガードは「本文がまだ1文字も出ていない」間だけ。
+            # 本文が出始めた生成 (= 答えを書いている) は決して打ち切らない。
+            if content_parts:
+                continue
+            # トークン数の推定: SSE の delta 数と 文字数÷4 の大きい方。
+            #   llama.cpp は1トークン1チャンクで送るので delta 数がそのまま
+            #   トークン数になる。まとめて送るサーバでは delta 数が過小に
+            #   なるので、文字数からの見積り (実測 3.65 文字/トークン、
+            #   安全側に 4) で補う。どちらも過小側に倒れる = 早発しない。
+            if self.reasoning_max_tokens:
+                est_tokens = max(reasoning_chunks, reasoning_chars // 4)
+                over = est_tokens >= self.reasoning_max_tokens
+            else:
+                over = False
+            if over:
+                abort = (
+                    f"思考が上限 {self.reasoning_max_tokens} トークンに到達"
+                    f" (本文は未出力 / 思考 {reasoning_chars:,}文字)"
+                )
+                finish_reason = FINISH_REASONING_BUDGET
+                break
+            if self.loop_guard and reasoning_chars >= next_check:
+                next_check = reasoning_chars + _LOOP_GUARD_INTERVAL
+                hit = detect_reasoning_loop(tail)
+                if hit:
+                    abort = (
+                        f"思考が縮退ループに陥っています ({hit})"
+                        f" / 思考 {reasoning_chars:,}文字 で打ち切り"
+                    )
+                    finish_reason = FINISH_REASONING_LOOP
+                    break
+        return (
+            "".join(content_parts), "".join(reasoning_parts),
+            usage, finish_reason, abort,
+        )
 
     def _finalize(
         self, content: str, reasoning: str, usage: dict,
-        finish_reason: str | None, raw: dict,
+        finish_reason: str | None, raw: dict, abort: str = "",
     ) -> GenerationResult:
-        """content/reasoning/usage から GenerationResult を組み立てる (共通処理)."""
+        """content/reasoning/usage から GenerationResult を組み立てる (共通処理).
+
+        ``abort`` が非空なら思考暴走ガードが接続を切った生成。無条件で
+        打ち切り扱いにする (max_tokens には到達していないため)。
+        """
         completion_tokens = usage.get("completion_tokens")
         text = content
         # 打ち切り判定: finish_reason=length か、completion_tokens が
@@ -241,6 +380,14 @@ class OpenAICompatClient(LLMClient):
         truncated = bool(finish_reason == "length") or bool(
             completion_tokens and completion_tokens >= self.max_tokens
         )
+        if abort:
+            truncated = True
+            print(
+                f"⛔ {self.name}: 思考暴走ガードで生成を打ち切りました — {abort}。"
+                "この試行は失敗として記録され、残りの試行はスキップされます "
+                "(config: loop_guard / reasoning_max_tokens)",
+                file=sys.stderr,
+            )
         if finish_reason == "length":
             # 旧実装は `and content.strip()` を条件に付けていたため、
             # **content が空＝最も危険な場面でこの警告が出なかった**。条件を外す。
@@ -250,6 +397,19 @@ class OpenAICompatClient(LLMClient):
                 f"(completion_tokens={completion_tokens})。"
                 "max_tokens 引き上げ、または reasoning_effort の抑制を検討してください",
                 file=sys.stderr,
+            )
+        if abort:
+            # ガードで切った思考は「同じ断片の反復」なので、reasoning への
+            # フォールバックはしない。180,000文字の縮退テキストを grader に
+            # 食わせても抽出できるコードは無く、採点時間を捨てるだけ。
+            return GenerationResult(
+                text="",
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=completion_tokens,
+                finish_reason=finish_reason,
+                truncated=True,
+                max_tokens=self.max_tokens,
+                raw=raw,
             )
         if not content.strip():
             # 推論(thinking)系モデル対策: llama.cpp/vLLM等はreasoning_format設定時、
@@ -324,12 +484,16 @@ class OpenAICompatClient(LLMClient):
                         _parse_retry_after(resp.headers.get("Retry-After")),
                     )
                 raise RuntimeError(msg)
+            abort = ""
             if self.stream:
-                content, reasoning, usage, finish_reason = self._consume_stream(resp)
+                content, reasoning, usage, finish_reason, abort = (
+                    self._consume_stream(resp)
+                )
                 raw = {
                     "stream": True,
                     "usage": usage,
                     "finish_reason": finish_reason,
+                    "abort": abort,
                 }
             else:
                 data = resp.json()
@@ -345,7 +509,7 @@ class OpenAICompatClient(LLMClient):
         finally:
             if self.stream:
                 resp.close()
-        return self._finalize(content, reasoning, usage, finish_reason, raw)
+        return self._finalize(content, reasoning, usage, finish_reason, raw, abort)
 
     def _generate(self, system: str, user: str) -> GenerationResult:
         """一時的失敗を指数バックオフで再試行する ``_post_once`` ラッパ.

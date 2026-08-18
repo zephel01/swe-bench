@@ -54,6 +54,12 @@ class Attempt:
     truncated: bool = False
     finish_reason: str = ""
     max_tokens: int | None = None
+    # 通信/インフラ起因の失敗 (429, timeout, 接続断など)。
+    # モデルの能力ではないので success_rate の分母から外す。
+    errored: bool = False
+    # fail-fast で実行されなかった試行。errored と同様に分母から外すが、
+    # 「通信が落ちた」のではなく「回すだけ無駄と判断して省いた」なので区別する。
+    skipped: bool = False
 
 
 @dataclass
@@ -78,6 +84,8 @@ class TaskResult:
     pass_at_1: float = 0.0
     pass_at_k: float = 0.0
     pass_k: int = 1                    # pass_at_k の実際の k (既定は runs と同値)
+    n_errored: int = 0                 # 通信/インフラ起因で採点できなかった試行数
+    n_skipped: int = 0                 # fail-fast で実行しなかった試行数
     attempts: list = field(default_factory=list)   # 各試行の要約 (軽量)
 
     # --- 打ち切り ---
@@ -166,6 +174,13 @@ class BenchmarkRunner:
         self.usability_cfg = config.get("usability", {})
         # pass@k の k (run.pass_k)。null/未設定なら runs と同値 = 従来挙動。
         self.pass_k = self.run_cfg.get("pass_k")
+        # fail-fast: 1回目の試行が「本文ゼロ + 打ち切り」だったタスクは、
+        # 残りの試行を回さずに切り上げる。思考モデルが縮退ループに落ちると
+        # 1試行で max_tokens 分の時間を丸ごと使うため、runs=5 なら5倍の
+        # 時間を確実に失敗するだけのために払うことになる。
+        # 判定を「本文が1文字も無い」に限定しているので、途中まで書けている
+        # 生成 (= 予算不足でたまたま切れただけ) は従来どおり全試行回す。
+        self.fail_fast = bool(self.run_cfg.get("fail_fast", True))
         wd = self.run_cfg.get("workdir")
         self.work_root = (
             Path(wd) if wd else Path(tempfile.gettempdir()) / "llmbench_work"
@@ -412,10 +427,18 @@ class BenchmarkRunner:
                     total_latency + (time.monotonic() - t_gen), 2
                 )
                 at.fail_reason = f"generation error: {e}"
+                at.errored = True
                 return at
             total_latency += gen.latency_sec
             ev = grader.evaluate(task, gen.text, ctx)
             if ev.parse_ok and not _extraction_suspect(ev):
+                break
+            # 打ち切られた生成は作り直さない。パース失敗の原因が「出力が
+            # 途中で切れた」ことにある以上、同じ予算をもう一度使っても
+            # 同じ壁に当たるだけで、1回あたり max_tokens 分の時間を捨てる。
+            # (実測: 49,152tok の思考ループを generate_retries=1 で2回引くと
+            #  1試行あたり5分。runs=5 なら1タスク25分。)
+            if getattr(gen, "truncated", False):
                 break
         at.latency_sec = round(total_latency, 2)
         if gen is not None:
@@ -485,12 +508,44 @@ class BenchmarkRunner:
             with ThreadPoolExecutor(max_workers=conc) as ex:
                 attempts = list(ex.map(_attempt, range(runs)))
         else:
-            attempts = [_attempt(i) for i in range(runs)]
+            attempts = []
+            for i in range(runs):
+                at = _attempt(i)
+                attempts.append(at)
+                # fail-fast: 「本文ゼロで打ち切られた」= 思考が終わらなかった
+                # 試行。同じ条件でもう4回引いても同じ壁に当たるだけなので、
+                # 残りはスキップ扱いにして次のタスクへ進む。
+                if getattr(self, "fail_fast", True) and _hopeless(at):
+                    remaining = runs - i - 1
+                    if remaining:
+                        reason = (
+                            f"skipped by fail-fast: 試行{i + 1}が本文ゼロで"
+                            f"打ち切られたため ({at.finish_reason or 'length'})"
+                        )
+                        attempts += [
+                            Attempt(skipped=True, fail_reason=reason)
+                            for _ in range(remaining)
+                        ]
+                    break
         _aggregate_attempts(tr, attempts, self.scoring_cfg, k=self.pass_k)
         tr.usability_tier = usability.classify(
             tr.success_rate, tr.quality_score, self.usability_cfg
         )
         return tr
+
+
+def _hopeless(at: Attempt) -> bool:
+    """この試行は「同じ条件で繰り返しても無駄」か (fail-fast の判定).
+
+    条件は **打ち切られた かつ 使える出力が1文字も無い** の同時成立に限る。
+
+    - 途中まで書けていた (raw_output あり) → 予算不足でたまたま切れただけの
+      可能性があるので繰り返す価値がある。スキップしない。
+    - 通信エラー (errored) → 時間を置けば直るので繰り返す。スキップしない。
+    - 本文ゼロ + 打ち切り → 思考が終わっていない。max_tokens も温度も
+      同じまま引き直しても同じ場所で溺れる。ここだけ切り上げる。
+    """
+    return bool(at.truncated) and not at.errored and not at.raw_output.strip()
 
 
 def _extraction_suspect(ev) -> bool:
@@ -513,8 +568,21 @@ def _aggregate_attempts(
     「1回でも成功したか」の 0/1 に退化する。k < n を指定すると
     「k回試して1回でも成功する確率」の不偏推定として意味を持つ。
     """
-    n = len(attempts)
-    passed = [a for a in attempts if a.resolved]
+    n_all = len(attempts)
+    # 通信/インフラ起因のエラー試行は「モデルが解けなかった」ではないので
+    # 成功率の分母から外す。全試行がエラーなら success_rate=0 のまま残し、
+    # fail_reason で理由が分かるようにする (静かに合格扱いにはしない)。
+    # fail-fast でスキップした試行も同様に分母から外す。回していない試行を
+    # 「失敗」として数えると、測っていないものを測ったことにしてしまう。
+    # (打ち切り自体は実行した試行の側に失敗として残るので、success_rate は
+    #  どちらにせよ 0 になる。分母だけが正直になる。)
+    errored = [a for a in attempts if a.errored and not a.skipped]
+    skipped = [a for a in attempts if a.skipped]
+    scored = [a for a in attempts if not a.errored and not a.skipped]
+    tr.n_errored = len(errored)
+    tr.n_skipped = len(skipped)
+    n = len(scored) or n_all
+    passed = [a for a in scored if a.resolved]
     c = len(passed)
 
     k_eff = n if k is None else max(1, min(int(k), n))
@@ -531,8 +599,14 @@ def _aggregate_attempts(
     # headline resolved は多数決 (runs=1 なら単一試行と一致)
     tr.resolved = tr.success_rate >= 0.5
 
-    # 速度メトリクスは平均
-    tr.latency_sec = round(sum(a.latency_sec for a in attempts) / n, 2) if n else 0.0
+    # 速度メトリクスは平均 (エラー試行も含めた実測)。
+    # スキップした試行は「0秒で終わった試行」ではないので分母から外す
+    # ——含めると打ち切りタスクの latency が実測の 1/5 に見えてしまう。
+    executed = [a for a in attempts if not a.skipped]
+    n_exec = len(executed)
+    tr.latency_sec = (
+        round(sum(a.latency_sec for a in executed) / n_exec, 2) if n_exec else 0.0
+    )
     tps = [a.tokens_per_sec for a in attempts if a.tokens_per_sec]
     tr.tokens_per_sec = round(sum(tps) / len(tps), 1) if tps else None
     toks = [a.completion_tokens for a in attempts if a.completion_tokens]
@@ -545,15 +619,23 @@ def _aggregate_attempts(
     tr.max_tokens = mt[0] if mt else None
 
     # 失敗理由
-    if c == n:
-        tr.fail_reason = ""
+    err_note = f" [+{len(errored)} errored]" if errored else ""
+    if skipped:
+        err_note += f" [+{len(skipped)} skipped by fail-fast]"
+    if not scored:
+        tr.fail_reason = (
+            f"all {n_all} attempt(s) errored: "
+            f"{errored[0].fail_reason if errored else ''}"
+        )
+    elif c == n:
+        tr.fail_reason = err_note.strip()
     elif c == 0:
-        tr.fail_reason = attempts[0].fail_reason if attempts else ""
+        tr.fail_reason = (scored[0].fail_reason if scored else "") + err_note
     else:
-        tr.fail_reason = f"flaky {c}/{n} passed"
+        tr.fail_reason = f"flaky {c}/{n} passed{err_note}"
 
     # 代表試行 (artifacts用): 最初の成功試行、なければ最初の試行
-    rep = passed[0] if passed else (attempts[0] if attempts else Attempt())
+    rep = passed[0] if passed else ((scored or attempts or [Attempt()])[0])
     tr.parse_ok = rep.parse_ok
     tr.parse_error = rep.parse_error
     tr.parsed_files = rep.parsed_files
@@ -571,6 +653,8 @@ def _aggregate_attempts(
             "fail_reason": a.fail_reason,
             "truncated": a.truncated,
             "finish_reason": a.finish_reason,
+            "errored": a.errored,
+            "skipped": a.skipped,
         }
         for a in attempts
     ]
@@ -635,8 +719,13 @@ def _log_task(progress, tr: TaskResult) -> None:
     tier = usability.TIER_LABEL.get(tr.usability_tier, "")
     if tr.runs > 1:
         progress(
-            f"    {status}  成功 {tr.n_pass}/{tr.runs} "
-            f"(pass@1={tr.pass_at_1:.2f} pass@{tr.runs}={tr.pass_at_k:.2f})  "
+            f"    {status}  成功 {tr.n_pass}/{tr.runs - tr.n_errored - tr.n_skipped} "
+            + (f"(⚠️ {tr.n_errored}件は通信エラーで除外) " if tr.n_errored else "")
+            + (
+                f"(⏭️ {tr.n_skipped}件は fail-fast でスキップ) "
+                if tr.n_skipped else ""
+            )
+            + f"(pass@1={tr.pass_at_1:.2f} pass@{tr.runs}={tr.pass_at_k:.2f})  "
             f"quality={tr.quality_score:.0f} combined={tr.combined:.0f}  "
             f"[{tier}]  ({tr.latency_sec:.1f}s)"
         )
@@ -711,6 +800,10 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
         # 内訳に「言い終わる前に切られた」が混ざっているので、スコアだけを見て
         # モデルの実力と読んではいけない。
         "n_truncated": sum(1 for r in run.results if r.truncated),
+        # fail-fast で試行を省いたタスク数と、省いた試行の総数。
+        # 「N回測った」と言えるのはこれが 0 のときだけなので summary に残す。
+        "n_fail_fast_tasks": sum(1 for r in run.results if r.n_skipped),
+        "n_skipped_attempts": sum(r.n_skipped for r in run.results),
         "usability": {t: overall.get(t, 0) for t in usability.TIERS},
     }
     # 速度指標も summary に置く。従来はタスク単位 (results[]) にしか無く、
