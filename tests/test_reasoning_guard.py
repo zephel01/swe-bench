@@ -20,10 +20,13 @@ from pathlib import Path
 
 import llmbench.clients.openai_compat as oc
 from llmbench.clients.openai_compat import (
+    _CONTENT_LOOP_MIN_CHARS,
+    FINISH_CONTENT_LOOP,
     FINISH_REASONING_BUDGET,
     FINISH_REASONING_LOOP,
     OpenAICompatClient,
     detect_reasoning_loop,
+    ThinkSplitter,
     duplicate_line_ratio,
     find_repeating_unit,
 )
@@ -310,3 +313,160 @@ def test_skipped_attempts_are_excluded_from_denominator():
     assert tr.latency_sec == 150.0
     assert "skipped by fail-fast" in tr.fail_reason
     assert [a["skipped"] for a in tr.attempts] == [False, True, True, True, True]
+
+
+# ────────────────── ④ 本文側の暴走 / <think> の content 混入 ──────────────────
+#
+# 実測 t048 (architect): content が非空のまま 49,152 トークンに到達した。
+# 同じタスクの正答は他モデルで 2,109〜2,449 バイト、gold は2ファイル59行。
+# 「大きい答えが切れた」ではなく本文側の暴走。原因は2通りあり、どちらでも
+# 止まる必要がある:
+#   (A) 思考は分離されていて、答えを書き始めた後に反復へ落ちた
+#   (B) サーバが <think> を content に流していて、思考側ガードが
+#       1トークン目から無効化されていた
+
+def test_whitespace_only_unit_is_not_a_loop():
+    """末尾が改行やインデントの連続なだけの正常な出力を誤判定しない.
+
+    コードブロックの末尾では普通に起きるので、ここを見落とすと
+    正常な生成を殺す。
+    """
+    assert find_repeating_unit("def f():\n    return 1\n\n\n\n\n\n\n\n") is None
+    assert find_repeating_unit("x = 1" + " " * 40) is None
+    assert find_repeating_unit("code\n" + "\t" * 30) is None
+    # 空白を含んでいても非空白があれば従来どおり検出する
+    assert find_repeating_unit("head" + "ab \n" * 30) == "ab \n"
+
+
+# --- ThinkSplitter 単体 ---
+
+def test_think_splitter_separates_inline_think():
+    s = ThinkSplitter()
+    think, body = s.feed("<think>let me reason</think>--- FILE: a.py ---")
+    assert "let me reason" in think
+    assert body == "--- FILE: a.py ---"
+
+
+def test_think_splitter_handles_tag_across_chunks():
+    """タグがチャンク境界で割れても取りこぼさない (1トークンずつ届くため必須)."""
+    s = ThinkSplitter()
+    out_t, out_b = [], []
+    for ch in ["<th", "ink>", "aaa", "</thi", "nk>", "BODY"]:
+        t, b = s.feed(ch)
+        out_t.append(t)
+        out_b.append(b)
+    t, b = s.flush()
+    out_t.append(t)
+    out_b.append(b)
+    assert "aaa" in "".join(out_t)
+    assert "".join(out_b) == "BODY"
+    assert s.in_think is False
+
+
+def test_think_splitter_only_holds_back_possible_tag_prefix():
+    """タグの途中になりえない末尾は持ち越さない.
+
+    無条件に持ち越すと、タグを使わないサーバで本文の検出が毎回
+    数文字ぶん遅れる (短い答えだと最後まで本文と認識されない)。
+    """
+    assert ThinkSplitter._partial_tag_len("--- FILE: a.py ---") == 0
+    assert ThinkSplitter._partial_tag_len("code here <") == 1
+    assert ThinkSplitter._partial_tag_len("code here <th") == 3
+    assert ThinkSplitter._partial_tag_len("code here </thin") == 6
+
+
+def test_think_splitter_passthrough_when_no_tags():
+    """タグを使わないサーバでは全部が本文 = 従来どおりの挙動."""
+    s = ThinkSplitter()
+    t, b = s.feed("--- FILE: a.py ---\ncode")
+    assert t == ""
+    assert b == "--- FILE: a.py ---\ncode"
+
+
+# --- (B) content に <think> が混ざるサーバ ---
+
+def test_guard_still_works_when_think_leaks_into_content(monkeypatch):
+    """reasoning_content に分離しないサーバでもガードが効く.
+
+    ここが効かないと、思考の1トークン目で content が非空になり
+    ガードが最初から無効化される。
+    """
+    lines = [_content("<think>")] + [_content("1," * 250) for _ in range(60)]
+    lines.append(_content("</think>done", "stop"))
+    resp = _install(monkeypatch, _FakeStreamResp(lines))
+    r = _client()._post_once("sys", "user")
+
+    assert r.finish_reason == FINISH_REASONING_LOOP
+    assert r.truncated is True
+    assert resp.consumed < len(lines)
+
+
+def test_reasoning_budget_applies_to_inline_think(monkeypatch):
+    lines = [_content("<think>")]
+    lines += [_content(f"thought {i}\n") for i in range(500)]
+    lines.append(_content("</think>done", "stop"))
+    resp = _install(monkeypatch, _FakeStreamResp(lines))
+    r = _client(loop_guard=False, reasoning_max_tokens=100)._post_once("s", "u")
+
+    assert r.finish_reason == FINISH_REASONING_BUDGET
+    assert resp.consumed < len(lines)
+
+
+# --- (A) 本文そのものが縮退 ---
+
+def test_content_loop_guard_aborts_runaway_body(monkeypatch):
+    """本文を書き始めた後の縮退も止める (t048 の形)."""
+    lines = [_content("--- FILE: router.py ---\n```python\n")]
+    # 1チャンク500文字 × 60 = 30,000文字。本文側は 16,000 文字から見始める。
+    lines += [_content("x=1;" * 125) for _ in range(60)]
+    lines.append(_content("```", "stop"))
+    resp = _install(monkeypatch, _FakeStreamResp(lines))
+    r = _client()._post_once("sys", "user")
+
+    assert r.finish_reason == FINISH_CONTENT_LOOP
+    assert r.truncated is True
+    # 本文は捨てない: 縮退より前の正しいブロックを grader に見せる
+    assert r.text.startswith("--- FILE: router.py ---")
+    assert resp.consumed < len(lines)
+
+
+def test_normal_sized_answer_is_never_touched(monkeypatch):
+    """実測の正答サイズ (2,109〜2,449 バイト) は本文ガードのしきい値の遥か下.
+
+    正常な答えを1文字も削らないことが、このガードの前提条件。
+    """
+    answer = (
+        "--- FILE: router.py ---\n```python\n"
+        + "".join(f"def handler_{i}(request):\n    return {i}\n\n" for i in range(60))
+        + "```\n"
+    )
+    assert len(answer) < _CONTENT_LOOP_MIN_CHARS
+    lines = [_content(answer[i:i + 200]) for i in range(0, len(answer), 200)]
+    lines.append(_content("", "stop"))
+    resp = _install(monkeypatch, _FakeStreamResp(lines))
+    r = _client()._post_once("sys", "user")
+
+    assert r.finish_reason == "stop"
+    assert r.truncated is False
+    assert r.text == answer
+    assert resp.consumed == len(lines)
+
+
+def test_long_but_healthy_body_is_not_aborted(monkeypatch):
+    """しきい値を超えても、反復していない本文なら最後まで書かせる."""
+    import random
+    random.seed(1)
+    body = "".join(
+        f"def handler_{i}(req):\n    return compute_{random.randint(0, 9999)}(req)\n\n"
+        for i in range(900)
+    )
+    assert len(body) > _CONTENT_LOOP_MIN_CHARS * 2
+    lines = [_content("--- FILE: big.py ---\n")]
+    lines += [_content(body[i:i + 300]) for i in range(0, len(body), 300)]
+    lines.append(_content("", "stop"))
+    resp = _install(monkeypatch, _FakeStreamResp(lines))
+    r = _client()._post_once("sys", "user")
+
+    assert r.finish_reason == "stop"
+    assert r.truncated is False
+    assert resp.consumed == len(lines)

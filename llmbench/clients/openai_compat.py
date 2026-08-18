@@ -41,8 +41,18 @@ _MAX_RETRY_AFTER = 120.0
 #   このとき生成は必ず失敗するのに、1回あたり max_tokens 分の時間を丸ごと
 #   消費する (49,152tok @ 330tok/s ≒ 150秒)。runs=5 × generate_retries=1 なら
 #   1タスクで最大10回 = 25分。frontier 帯が続くとランが実質止まって見える。
-# 対策: ストリーミング中に「まだ本文が1文字も出ていない」状態に限り、
-#   反復を検出した時点で接続を切る。本文が出始めた生成は絶対に止めない。
+# 対策: ストリーミング中に反復を検出した時点で接続を切る。
+#
+# ⚠️ 2026-08-18 追記 — 「本文が出たら止めない」だけでは足りなかった。
+#   t048 (architect) で content が非空のまま 49,152 トークンに到達した。
+#   同じタスクの正答は他モデルで 2,109〜2,449 バイト (≒600〜700tok)、gold は
+#   2ファイル59行。60〜80倍は「大きい答えが切れた」ではなく本文側の暴走。
+#   さらに、サーバが <think> を reasoning_content に分離しない構成では
+#   最初の思考トークンで content が非空になり、思考側ガードが1トークン目から
+#   無効化されてしまう。そこで:
+#     ・content 中の <think>…</think> は「思考」として扱い、思考側ガードを効かせる
+#     ・think の外 (= 本文) にも反復ガードを入れる。ただし正答の数倍という
+#       余裕を持ったしきい値で、明確な縮退だけを捕まえる
 _LOOP_GUARD_MIN_CHARS = 8000      # これ未満の思考は判定しない (正常な長考を殺さない)
 _LOOP_GUARD_INTERVAL = 4000       # 何文字進むごとに判定するか
 _LOOP_GUARD_TAIL = 3000           # 末尾何文字を検査対象にするか
@@ -50,11 +60,16 @@ _LOOP_GUARD_MAX_PERIOD = 400      # 反復単位の最大長 (これより長い
 _LOOP_GUARD_MIN_REPEATS = 6       # 何回連続で繰り返したらループとみなすか
 _LOOP_GUARD_MIN_LINES = 20        # 行反復判定に必要な最小行数
 _LOOP_GUARD_DUP_LINE_RATIO = 0.8  # 重複行の割合がこれ以上ならループとみなす
+# 本文側の判定開始しきい値。実測の正答 2,109〜2,449 バイトに対して約7倍。
+# コードは繰り返しの多い行 (import/dictリテラル) を含むので、思考側より
+# 大きく取って「明らかに書きすぎている」ときだけ見る。
+_CONTENT_LOOP_MIN_CHARS = 16000
 
 # 打ち切り理由 (finish_reason に入れる合成値)。サーバ由来の値
 # (stop/length/...) と衝突しないよう llmbench 独自の接頭辞を付ける。
 FINISH_REASONING_LOOP = "llmbench:reasoning_loop"
 FINISH_REASONING_BUDGET = "llmbench:reasoning_budget"
+FINISH_CONTENT_LOOP = "llmbench:content_loop"
 
 
 def find_repeating_unit(
@@ -67,12 +82,18 @@ def find_repeating_unit(
     "1,1,1,1,..." のようなトークン単位のループも、同一文の行単位ループも
     同じ判定で拾える。周期 p を短い順に試し、末尾 p*min_repeats 文字が
     単位の単純な繰り返しになっているかだけを見る。
+
+    ⚠️ 空白だけの単位は無視する。これを見ないと、末尾が改行6連続や
+    インデント6連続になっているだけの正常な出力を「反復」と誤判定する
+    (コードブロックの末尾では普通に起きる)。
     """
     n = len(tail)
     if n < min_repeats:
         return None
     for p in range(1, min(max_period, n // min_repeats) + 1):
         unit = tail[-p:]
+        if not unit.strip():
+            continue                     # 空白のみの単位は反復とみなさない
         if tail[-p * min_repeats:] == unit * min_repeats:
             return unit
     return None
@@ -100,6 +121,80 @@ def detect_reasoning_loop(tail: str) -> str | None:
     if ratio >= _LOOP_GUARD_DUP_LINE_RATIO:
         return f"直近の行の{ratio * 100:.0f}%が重複"
     return None
+
+
+_THINK_OPEN = ("<think>", "<thinking>")
+_THINK_CLOSE = ("</think>", "</thinking>")
+# タグがチャンク境界で分断されても取りこぼさないよう、末尾をこの長さだけ
+# 次回に持ち越す (最長タグ長 - 1)。
+_THINK_CARRY = max(len(t) for t in _THINK_OPEN + _THINK_CLOSE) - 1
+
+
+class ThinkSplitter:
+    """content ストリームを「思考 (<think>内)」と「本文」に振り分ける.
+
+    サーバによっては思考を ``reasoning_content`` に分離せず、``content`` に
+    ``<think>…</think>`` のまま流してくる (llama.cpp の --reasoning-format 次第。
+    非ストリームでは分離されるのにストリームでは分離されない構成もある)。
+    その場合 content は最初の思考トークンで非空になるので、「本文が出たら
+    ガードを外す」という判定が1トークン目から効かなくなる。ここで振り分けて
+    おけば、分離するサーバでもしないサーバでも同じガードが働く。
+
+    タグが見つからない (= 素直に本文だけを返すサーバ) ときは、全部が本文に
+    なるので従来と同じ挙動になる。
+    """
+
+    def __init__(self) -> None:
+        self.in_think = False
+        self._carry = ""
+
+    @staticmethod
+    def _partial_tag_len(buf: str) -> int:
+        """``buf`` の末尾が何文字ぶんタグの途中になりうるか (0 なら持ち越し不要).
+
+        無条件に末尾を持ち越すと、タグを一切使わないサーバでも本文の
+        検出が最大10文字ぶん遅れる。ここでタグの前方一致だけを見て、
+        本当に途中でありうるときだけ持ち越す。
+        """
+        tags = _THINK_OPEN + _THINK_CLOSE
+        for k in range(min(_THINK_CARRY, len(buf)), 0, -1):
+            suffix = buf[-k:]
+            if any(t.startswith(suffix) for t in tags):
+                return k
+        return 0
+
+    def feed(self, chunk: str) -> tuple[str, str]:
+        """チャンクを (思考として扱う分, 本文として扱う分) に分けて返す."""
+        buf = self._carry + chunk
+        keep = self._partial_tag_len(buf)
+        self._carry, buf = buf[len(buf) - keep:] if keep else "", (
+            buf[:len(buf) - keep] if keep else buf
+        )
+        return self._split(buf)
+
+    def flush(self) -> tuple[str, str]:
+        """ストリーム終了時に持ち越し分を吐き出す."""
+        buf, self._carry = self._carry, ""
+        return self._split(buf)
+
+    def _split(self, buf: str) -> tuple[str, str]:
+        think_parts: list[str] = []
+        body_parts: list[str] = []
+        while buf:
+            tags = _THINK_CLOSE if self.in_think else _THINK_OPEN
+            hits = [(buf.find(t), t) for t in tags]
+            hits = [(i, t) for i, t in hits if i >= 0]
+            if not hits:
+                (think_parts if self.in_think else body_parts).append(buf)
+                break
+            idx, tag = min(hits)
+            if idx:
+                (think_parts if self.in_think else body_parts).append(buf[:idx])
+            # タグ自体は思考側に数える (本文の一部ではない)
+            think_parts.append(tag)
+            self.in_think = not self.in_think
+            buf = buf[idx + len(tag):]
+        return "".join(think_parts), "".join(body_parts)
 
 
 class RetryableHTTPError(RuntimeError):
@@ -283,8 +378,13 @@ class OpenAICompatClient(LLMClient):
     def _consume_stream(self, resp) -> tuple[str, str, dict, str | None, str]:
         """SSE を読み切って (content, reasoning, usage, finish_reason, abort) を返す.
 
-        ``abort`` は思考暴走ガードが接続を切ったときだけ非空になる
+        ``abort`` は暴走ガードが接続を切ったときだけ非空になる
         (ガードが働かなければ従来どおり空文字)。
+
+        ガードは2段。``content`` 中の ``<think>…</think>`` は思考として扱うので、
+        サーバが reasoning_content に分離してもしなくても同じ判定になる。
+          1. 本文がまだ出ていない間 … 思考の反復 / 思考トークン上限
+          2. 本文が出始めてから    … 本文の反復 (しきい値は大きめ)
         """
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -293,10 +393,40 @@ class OpenAICompatClient(LLMClient):
         abort = ""
         # ガード用の状態。tail は末尾 _LOOP_GUARD_TAIL 文字だけ持ち回る
         # (180,000 文字の思考でも毎回フル結合しないため)。
-        tail = ""
+        splitter = ThinkSplitter()
+        tail = ""                     # 思考テキストの末尾
         reasoning_chars = 0
         reasoning_chunks = 0
         next_check = _LOOP_GUARD_MIN_CHARS
+        body_tail = ""                # 本文の末尾
+        body_chars = 0                # 本文の文字数 (<think> の外)
+        body_started = False          # 本文に空白以外が出たか
+        next_body_check = _CONTENT_LOOP_MIN_CHARS
+
+        def _add_think(text: str) -> None:
+            """ガード用に「思考テキスト」を積む.
+
+            ここに来るのは (a) reasoning_content フィールド と
+            (b) content 中の <think>…</think> の2経路。(b) は content 側に
+            そのまま残っているので、返り値の reasoning には積まない
+            (積むと同じ文字列が二重に出てフォールバック判定を狂わせる)。
+            """
+            nonlocal tail, reasoning_chars, reasoning_chunks
+            if not text:
+                return
+            reasoning_chars += len(text)
+            reasoning_chunks += 1
+            tail = (tail + text)[-_LOOP_GUARD_TAIL:]
+
+        def _add_body(text: str) -> None:
+            nonlocal body_tail, body_chars, body_started
+            if not text:
+                return
+            body_chars += len(text)
+            body_tail = (body_tail + text)[-_LOOP_GUARD_TAIL:]
+            if text.strip():
+                body_started = True
+
         for raw_line in resp.iter_lines(decode_unicode=True):
             if not raw_line:
                 continue
@@ -318,47 +448,64 @@ class OpenAICompatClient(LLMClient):
                 delta = choice.get("delta") or {}
                 if delta.get("content"):
                     content_parts.append(delta["content"])
+                    # content 内の <think>…</think> は思考として数える
+                    think_text, body_text = splitter.feed(delta["content"])
+                    _add_think(think_text)
+                    _add_body(body_text)
                 reasoning = (
                     delta.get("reasoning_content") or delta.get("reasoning") or ""
                 )
                 if reasoning:
                     reasoning_parts.append(reasoning)
-                    reasoning_chars += len(reasoning)
-                    reasoning_chunks += 1
-                    tail = (tail + reasoning)[-_LOOP_GUARD_TAIL:]
+                    _add_think(reasoning)
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
-            # ガードは「本文がまだ1文字も出ていない」間だけ。
-            # 本文が出始めた生成 (= 答えを書いている) は決して打ち切らない。
-            if content_parts:
-                continue
-            # トークン数の推定: SSE の delta 数と 文字数÷4 の大きい方。
-            #   llama.cpp は1トークン1チャンクで送るので delta 数がそのまま
-            #   トークン数になる。まとめて送るサーバでは delta 数が過小に
-            #   なるので、文字数からの見積り (実測 3.65 文字/トークン、
-            #   安全側に 4) で補う。どちらも過小側に倒れる = 早発しない。
-            if self.reasoning_max_tokens:
-                est_tokens = max(reasoning_chunks, reasoning_chars // 4)
-                over = est_tokens >= self.reasoning_max_tokens
-            else:
-                over = False
-            if over:
-                abort = (
-                    f"思考が上限 {self.reasoning_max_tokens} トークンに到達"
-                    f" (本文は未出力 / 思考 {reasoning_chars:,}文字)"
-                )
-                finish_reason = FINISH_REASONING_BUDGET
-                break
-            if self.loop_guard and reasoning_chars >= next_check:
-                next_check = reasoning_chars + _LOOP_GUARD_INTERVAL
-                hit = detect_reasoning_loop(tail)
+            if not body_started:
+                # ── 段1: まだ本文が出ていない = 思考中 ──
+                # トークン数の推定: SSE の delta 数と 文字数÷4 の大きい方。
+                #   llama.cpp は1トークン1チャンクで送るので delta 数がそのまま
+                #   トークン数になる。まとめて送るサーバでは delta 数が過小に
+                #   なるので、文字数からの見積り (実測 3.65 文字/トークン、
+                #   安全側に 4) で補う。どちらも過小側に倒れる = 早発しない。
+                if self.reasoning_max_tokens:
+                    est_tokens = max(reasoning_chunks, reasoning_chars // 4)
+                    over = est_tokens >= self.reasoning_max_tokens
+                else:
+                    over = False
+                if over:
+                    abort = (
+                        f"思考が上限 {self.reasoning_max_tokens} トークンに到達"
+                        f" (本文は未出力 / 思考 {reasoning_chars:,}文字)"
+                    )
+                    finish_reason = FINISH_REASONING_BUDGET
+                    break
+                if self.loop_guard and reasoning_chars >= next_check:
+                    next_check = reasoning_chars + _LOOP_GUARD_INTERVAL
+                    hit = detect_reasoning_loop(tail)
+                    if hit:
+                        abort = (
+                            f"思考が縮退ループに陥っています ({hit})"
+                            f" / 思考 {reasoning_chars:,}文字 で打ち切り"
+                        )
+                        finish_reason = FINISH_REASONING_LOOP
+                        break
+            elif self.loop_guard and body_chars >= next_body_check:
+                # ── 段2: 本文を書いている最中の縮退 ──
+                # ここまで書いて反復に入っているなら、その答えはもう壊れている。
+                # ただし本文は捨てない (縮退より前に正しいブロックが書かれて
+                # いる可能性があるので、grader に判断させる)。
+                next_body_check = body_chars + _LOOP_GUARD_INTERVAL
+                hit = detect_reasoning_loop(body_tail)
                 if hit:
                     abort = (
-                        f"思考が縮退ループに陥っています ({hit})"
-                        f" / 思考 {reasoning_chars:,}文字 で打ち切り"
+                        f"本文が縮退ループに陥っています ({hit})"
+                        f" / 本文 {body_chars:,}文字 で打ち切り"
                     )
-                    finish_reason = FINISH_REASONING_LOOP
+                    finish_reason = FINISH_CONTENT_LOOP
                     break
+        # 持ち越し分 (タグ途中で終わった場合) を吐き出しておく。
+        # 集計値の整合のためで、返す content/reasoning には影響しない。
+        _add_think(splitter.flush()[0])
         return (
             "".join(content_parts), "".join(reasoning_parts),
             usage, finish_reason, abort,
@@ -370,7 +517,7 @@ class OpenAICompatClient(LLMClient):
     ) -> GenerationResult:
         """content/reasoning/usage から GenerationResult を組み立てる (共通処理).
 
-        ``abort`` が非空なら思考暴走ガードが接続を切った生成。無条件で
+        ``abort`` が非空なら暴走ガードが接続を切った生成。無条件で
         打ち切り扱いにする (max_tokens には到達していないため)。
         """
         completion_tokens = usage.get("completion_tokens")
@@ -382,11 +529,28 @@ class OpenAICompatClient(LLMClient):
         )
         if abort:
             truncated = True
+            tail_note = (
+                "本文はここまでの分を採点に回します"
+                if finish_reason == FINISH_CONTENT_LOOP
+                else "この試行は失敗として記録され、残りの試行はスキップされます"
+            )
             print(
-                f"⛔ {self.name}: 思考暴走ガードで生成を打ち切りました — {abort}。"
-                "この試行は失敗として記録され、残りの試行はスキップされます "
+                f"⛔ {self.name}: 暴走ガードで生成を打ち切りました — {abort}。"
+                f"{tail_note} "
                 "(config: loop_guard / reasoning_max_tokens)",
                 file=sys.stderr,
+            )
+        if abort and finish_reason == FINISH_CONTENT_LOOP:
+            # 本文側の打ち切りは、縮退より前に正しいブロックが書かれている
+            # 可能性があるので content を捨てない。打ち切り印だけ付けて返す。
+            return GenerationResult(
+                text=content,
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=completion_tokens,
+                finish_reason=finish_reason,
+                truncated=True,
+                max_tokens=self.max_tokens,
+                raw=raw,
             )
         if finish_reason == "length":
             # 旧実装は `and content.strip()` を条件に付けていたため、
