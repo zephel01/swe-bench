@@ -55,6 +55,32 @@ models:
     max_tokens: 49152
     timeout: 600
 
+    # ストリーミング必須。思考暴走ガード (下) は「途中で接続を切る」仕組みなので、
+    # 非ストリーム (生成が終わるまで1バイトも届かない) では原理的に効かない。
+    stream: true
+
+    # ══════════════════════════════════════════════════════════════════
+    # 思考(reasoning)暴走ガード — 2026-08-18 追加
+    # ══════════════════════════════════════════════════════════════════
+    # 実測 (Qwen3.8-9B-Q6_K / --with-l6 --runs 5) で t033 が事実上停止した:
+    #   content が空のまま reasoning_content だけが 176,000〜179,000 文字
+    #   伸び続け、毎回 max_tokens=49,152 に張り付いた。
+    #   1試行 ≒ 150秒 (330tok/s) × 再生成1回 × runs 5 = 1タスクで最大25分。
+    #   frontier 帯が28タスク続くので、ランが「止まった」ように見える。
+    #
+    # loop_guard: 反復(縮退)を検出した時点で接続を切る。既定 true。
+    #   ⚠️ 判定は「本文(content)がまだ1文字も出ていない」間だけ。本文を
+    #      書き始めた生成は絶対に打ち切らないので、import が並ぶコードや
+    #      dict リテラルを反復と誤判定して殺すことはない。
+    #   素の性能を測る A/B をやるときだけ false にする。
+    loop_guard: true
+    # 思考そのものの上限 (時間の保険)。反復していなくても、ここに達したら
+    # 本文ゼロのまま切る。SSE の delta チャンク数をトークン数の近似として
+    # 数えるので、サーバがまとめて送る場合は少なめ = 早発しない側に倒れる。
+    # null/未設定なら無効 (max_tokens まで走る = 従来動作)。
+    #   16384 ≒ max_tokens の 1/3。ここまで思考して本文が1文字も出ていない
+    #   なら、残り 32,768 トークンを使っても出てこない (実測 5/5 でそうだった)。
+    reasoning_max_tokens: 16384
     # 思考予算をリクエスト単位で絞る。Qwen3.8 は reasoning_effort に対応。
     # ⚠️ 有効化すると「素の性能」を測らないことになるので、比較時に注釈が要る。
     # reasoning_effort: "medium"     # low | medium | high
@@ -79,6 +105,10 @@ models:
     seed: 42
     max_tokens: 49152
     timeout: 600
+    # A/B の条件を1つだけにするため、ガードは上の local-openai と揃える
+    stream: true
+    loop_guard: true
+    reasoning_max_tokens: 16384
     # 計算バックエンド。省略時は推論プロセスのロード済みライブラリから自動検出する
     # (CUDA / ROCm / Vulkan / SYCL / Metal / CPU)。llama.cpp の /props は
     # build_info しか返さずバックエンドを教えてくれないため、tok/s の比較には
@@ -227,6 +257,8 @@ run:
   hf_repo_map:
     /mnt/data/models/Qwen3.8-27B-GGUF/: unsloth/Qwen3.8-27B-GGUF
     /mnt/data/models/Qwen3.8-27B/: Qwen/Qwen3.8-27B      # 自作量子化を置いていた場所
+    /mnt/data/models/Qwen3.8-9B-GGUF/: unsloth/Qwen3.8-9B-GGUF
+    /mnt/data/models/Qwen3.8-9B/: Qwen/Qwen3.8-9B
 
   issue_lang: en          # en | ja  (language tax検証はjaに切替えて再実行)
   test_timeout: 120       # pytest実行のタイムアウト(秒/タスク)
@@ -235,6 +267,16 @@ run:
                           #   思考モデルでは --generate-retries 0 で時間を節約できる
                           #   (弱いローカルモデルは 1 のままの方が公平なので既定は据え置き)
   workdir: null           # 一時作業ディレクトリ (null = システムtemp配下)
+  fail_fast: true         # 1回目の試行が「本文ゼロ + 打ち切り」なら残りの試行を省く
+                          #   ⚠️ 判定条件は **打ち切られた かつ 出力が1文字も無い**
+                          #      の同時成立のみ。途中まで書けていた生成 (予算不足で
+                          #      たまたま切れただけ) や通信エラーは対象外で、従来どおり
+                          #      runs 回まわす。思考が終わらないタスクだけを切り上げる。
+                          #   ⚠️ 省いた試行は success_rate の分母から外れる (n_skipped
+                          #      に記録)。回していない試行を「失敗」として数えないため。
+                          #      success_rate は実行した試行が失敗している以上 0 のまま。
+                          #   ⚠️ --concurrency >1 では runs を同時に投げるので効かない
+                          #      (その場合は並列化で壁時計時間が既に縮んでいる)。
   runs: 1                 # 各タスクの試行回数 (>1 で成功率を計測。pass@k は下の pass_k 参照)
   pass_k: null            # pass@k の k。null = runs と同値 (このとき pass@k は
                           #   「1回でも成功したか」の0/1に退化し solved_any_rate と同義)。
