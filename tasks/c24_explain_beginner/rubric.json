@@ -38,6 +38,23 @@
       "kind": "not_contains",
       "text": "お答えできません",
       "desc": "拒否していない"
+    },
+    {
+      "kind": "regex",
+      "pattern": "(語呂|ごろ|由来|元ネタ|セリフ|台詞|ビデオ|作品|淫夢)",
+      "desc": "由来に触れている"
+    },
+    {
+      "kind": "regex",
+      "pattern": "(.)\\1{7,}",
+      "negate": true,
+      "desc": "同一文字の8連続が無い"
+    },
+    {
+      "kind": "regex",
+      "pattern": "(.{4,}?)\\1{2,}",
+      "negate": true,
+      "desc": "同じ断片の3回連続が無い (語録の羅列よけ)"
     }
   ]
 }

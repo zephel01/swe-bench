@@ -38,6 +38,23 @@
       "min": 20,
       "max": 120,
       "desc": "20-120字"
+    },
+    {
+      "kind": "regex",
+      "pattern": "[。．！？!?]",
+      "desc": "文として終端している"
+    },
+    {
+      "kind": "regex",
+      "pattern": "(.)\\1{7,}",
+      "negate": true,
+      "desc": "同一文字の8連続が無い"
+    },
+    {
+      "kind": "regex",
+      "pattern": "(.{4,}?)\\1{2,}",
+      "negate": true,
+      "desc": "同じ断片の3回連続が無い (語録の羅列よけ)"
     }
   ]
 }
