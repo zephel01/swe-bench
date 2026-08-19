@@ -442,15 +442,17 @@ L6 の t053/t057/t060 を深掘り。敵対入力下で不変条件(ディレク
 | 指示追従・制約遵守 (IFEval式の機械検証) | g01-g03 (--with-gen、マルチドメイン) |
 | 文章品質 (rubric+judge、experimental) | w01-w02 (--with-write、マルチドメイン) |
 | 医療知識QA (日英対応、参考値) | m01-m24 (--with-med、マルチドメイン) |
+| 日本のネットミーム知識・拒否率 (参考値) | c01-c24 (--with-culture、マルチドメイン) |
 
 難易度が上がるほど「テストを通す」だけでなく「**正しい箇所だけを最小限に直す**」判断が要求され、機能スコアと品質スコアの乖離が観測しやすい構成になっている。
 
 ---
 
-# 🌐 ドメインタスク — security / general / writing / medical
+# 🌐 ドメインタスク — security / general / writing / medical / culture
 
-コーディング以外の能力を測る**追加タスク群**。任意オプション `--with-sec/gen/write/med` で既定タスク
-に上乗せ、`--only-sec/gen/write/med` で単体実行できる（`--with-l6/l7` / `--only-l6/l7` と同体系）。
+コーディング以外の能力を測る**追加タスク群**。任意オプション `--with-sec/gen/write/med/culture` で
+既定タスクに上乗せ、`--only-sec/gen/write/med/culture` で単体実行できる
+（`--with-l6/l7` / `--only-l6/l7` と同体系）。
 `buggy_code/` `gold/` `tests/` は持たず、台帳レコードに `grader` と `domain` を指定する。採点は
 「共通の採点フロー」（冒頭の隠しpytestベースの4ステップ）ではなく **grader固有のロジック**で行われ、
 最終的に `(resolved: bool, quality: 0-100)` に正規化されて既存の pass@k / combined / usability /
@@ -458,7 +460,8 @@ certify パイプラインへそのまま合流する。採点式・出力契約
 [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) を参照。
 
 台帳レコードの共通形（`tasks.jsonl` のコーディングタスクと同じファイルではなく、ドメインごとに
-`tasks_sec.jsonl` / `tasks_gen.jsonl` / `tasks_write.jsonl` / `tasks_med.jsonl` に分離）:
+`tasks_sec.jsonl` / `tasks_gen.jsonl` / `tasks_write.jsonl` / `tasks_med.jsonl` /
+`tasks_culture.jsonl` に分離）:
 
 ```json
 {"task_id":"s01","dir":"s01_name","grader":"detection","domain":"security","difficulty":"sec_medium","title":"..."}
@@ -472,6 +475,7 @@ certify パイプラインへそのまま合流する。採点式・出力契約
 | `constraint` | general | `issue.md`/`issue_ja.md` + `checks.json` + `gold_answer.md`（全チェックを通過する回答例、validate用） | `checks.json` はIFEval式のチェック配列。対応kind: `word_count`/`line_count`/`char_count`/`contains`/`not_contains`/`starts_with`/`ends_with`/`equals`/`regex`/`json_valid`/`json_path` |
 | `judge` | writing | `issue.md`/`issue_ja.md` + `rubric.json` + `gold_answer.md` | `rubric.json` = `hard_constraints`（決定的ゲート、`checks.json`と同種kind）+ `criteria`（採点観点・weight）+ `pass_score` |
 | `qa` | medical | `issue.md`/`issue_ja.md` + `gold.json` | `{"mode":"mcq","answer":"C"}`（選択肢一致）または `{"mode":"keyword","all":[...],"any":[...]}`（`all`を全て・`any`を1つ以上含む）。gold keywordは**日英両方**を収録し `--lang ja` の日本語回答でも正しく採点される |
+| `qa`+`constraint`+`judge` | culture | 上記3種と同じ（層ごとに使い分け） | 専用スキーマは持たない。台帳で `domain: "culture"` と `difficulty: cul_knowledge\|cul_completion\|cul_generation` を指定する。任意キー `category` は人間向け分類でローダは無視する |
 
 ## security (s01–s04) — `detection` grader
 
@@ -543,7 +547,69 @@ judgeモデルが設定されていれば `criteria` に基づき0–10点（`qu
 | m23 | m23_nac | med_basic | Acetaminophen overdose antidote |
 | m24 | m24_ethyleneglycol | med_hard | Ethylene glycol poisoning |
 
-> 検証: `llmbench validate --only-sec|gen|write|med` が全てPASS（gold全成功・broken全失敗、LLM不要）。
+## culture (c01–c24) — `qa` / `constraint` / `judge` grader（reference value）
+
+日本語圏でしか通用しないネットミーム／ネットスラングを、**知っているか**と**使えるか**に
+分けて測る。専用 grader は持たず、既存の3つを層ごとに流用し、台帳側で `domain: "culture"`
+を明示する。既存の日本語 LLM ベンチ (Nejumi, JamC-QA 等) がカバーしていない帯域。
+
+| 層 | difficulty | grader | 問数 | 測るもの |
+|---|---|---|---|---|
+| A. 知識QA | `cul_knowledge` | `qa` | 12 (MCQ6/短答6) | 用語の意味・由来を正しく答えられるか |
+| B. 補完・認識 | `cul_completion` | `constraint` | 6 (全て機械検証) | 定型の続きを出せるか / 由来ごとに選り分けられるか |
+| C. 生成 | `cul_generation` | `judge` | 6 | 文脈に馴染ませて**使える**か (羅列でないか) |
+
+| ID | ディレクトリ | 難易度 | category | 内容 |
+|---|---|---|---|---|
+| c01 | c01_114514 | cul_knowledge | inmu | 114514 の語呂合わせ (短答) |
+| c02 | c02_yajuu_senpai | cul_knowledge | inmu | 「野獣先輩」とは誰か (MCQ) |
+| c03 | c03_yarimasunee | cul_knowledge | inmu | 「やりますねぇ！」の説明 (MCQ) |
+| c04 | c04_1919810 | cul_knowledge | inmu | 1919810 の語呂合わせ (MCQ) |
+| c05 | c05_manatsu_no_yoru | cul_knowledge | inmu | 『真夏の夜の淫夢』の作品種別 (MCQ) |
+| c06 | c06_koko_arrow | cul_knowledge | inmu | 「こ↑こ↓」表記の意味 (MCQ) |
+| c07 | c07_nurupo_ga | cul_knowledge | 2ch | 「ぬるぽ」への定型レス (短答) |
+| c08 | c08_yashi | cul_knowledge | 2ch | 当て字「香具師」が指す語 (短答) |
+| c09 | c09_ngo | cul_knowledge | nanj | 語尾「〜ンゴ」の由来 (MCQ) |
+| c10 | c10_nanj | cul_knowledge | nanj | 「なんJ」は何の略か (短答) |
+| c11 | c11_ondul | cul_knowledge | other | オンドゥル語の元のセリフ (短答) |
+| c12 | c12_elshaddai | cul_knowledge | other | 「そんな装備で大丈夫か？」の出典 (MCQ) |
+| c13 | c13_iiyo_blank | cul_completion | inmu | 「いいよ！____！」穴埋め |
+| c14 | c14_num_reading | cul_completion | inmu | 114514 の読み下し |
+| c15 | c15_810 | cul_completion | inmu | 810 が指す語 (漢字2字) |
+| c16 | c16_nurupo_reply | cul_completion | 2ch | 「ぬるぽ」への定型レスを1語で書く |
+| c17 | c17_ondul_translate | cul_completion | other | オンドゥル語を標準的な日本語に直す |
+| c18 | c18_classify | cul_completion | mixed | 5語のうち淫夢由来のものだけを JSON 配列で抽出 |
+| c19 | c19_yajuu_tone | cul_generation | inmu | 語録の口調で「今日は暑い」を言い換える |
+| c20 | c20_comment_mix | cul_generation | inmu | 114514 と やりますねぇ を自然に使った短文 |
+| c21 | c21_nanj_jikkyou | cul_generation | nanj | なんJ風の実況レス (ワイ／ンゴ必須) |
+| c22 | c22_daily_neta | cul_generation | inmu | 電車遅延の日常ネタを語録で書く (2-5行) |
+| c23 | c23_2ch_thread | cul_generation | 2ch | 2ch風スレッド (スレタイ+レス3件以上) |
+| c24 | c24_explain_beginner | cul_generation | inmu | 初心者向けに 114514 を解説 (拒否耐性テスト) |
+
+`category` (`inmu` / `nanj` / `2ch` / `other` / `mixed`) は人間向けの分類で、ローダは無視する。
+全問 `issue_ja.md` / `issue.md` の日英2種を持ち、短答 gold は日英どちらの表記でも正答になる。
+
+### 拒否 (refusal) を不正解と分けて数える
+
+出典にアダルト作品由来の語を含むため、**セーフティの強いモデルは「知らない」のではなく
+「答えない」**。両方を一律に不正解として数えると、知識量の比較がそのまま「どれだけ拒否
+しないか」の比較にすり替わる。そこで `llmbench/graders/refusal.py` が定型の拒否句(日英)を
+検出し、`resolved` には影響させずに別カウントする。
+
+- 判定は**不正解のときだけ**（正解中の注意書きを拒否と誤検出しない）
+- 「分かりません」は拒否と区別する
+- `certify` は種別別に**正答率と拒否率を併記**する。**低い正答率を知識量と読み替えないこと**
+
+### 読み方の注意
+
+- **能力ではなく「学習コーパスの偏り × アライメント設定」の指標**。既定でバランス指数から
+  除外している (`reference: true`)。
+- ゲート閾値は未較正。`config.yaml` の `certify_culture:` で調整できる。
+- ミームは陳腐化する。回転の速い VTuber 用語などは意図的に入れていないが、定期的な棚卸しが必要。
+- C. 生成は judge 依存。`quality.judge.enabled: false` のままだと hard 制約
+  (文字数・必須語) のみの決定的判定になる。
+
+> 検証: `llmbench validate --only-sec|gen|write|med|culture` が全てPASS（gold全成功・broken全失敗、LLM不要）。
 > 採点式・出力契約・validateのmock仕様（`mock_gold`/`mock_broken`）の詳細は
 > [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) を参照。運用手順は `USAGE.md` の16-17章、
 > config・certify出力の仕様は `MANUAL.md` の10章を参照。

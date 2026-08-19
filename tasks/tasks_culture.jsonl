@@ -1,0 +1,24 @@
+{"task_id": "c01", "dir": "c01_114514", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "淫夢: 114514 の語呂合わせ", "category": "inmu"}
+{"task_id": "c02", "dir": "c02_yajuu_senpai", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "淫夢: 野獣先輩とは", "category": "inmu"}
+{"task_id": "c03", "dir": "c03_yarimasunee", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "淫夢: 「やりますねぇ！」の説明", "category": "inmu"}
+{"task_id": "c04", "dir": "c04_1919810", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "淫夢: 1919810 の語呂合わせ", "category": "inmu"}
+{"task_id": "c05", "dir": "c05_manatsu_no_yoru", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "淫夢: 『真夏の夜の淫夢』とは", "category": "inmu"}
+{"task_id": "c06", "dir": "c06_koko_arrow", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "淫夢: 「こ↑こ↓」の表記", "category": "inmu"}
+{"task_id": "c07", "dir": "c07_nurupo_ga", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "2ch: ぬるぽ への定型レス", "category": "2ch"}
+{"task_id": "c08", "dir": "c08_yashi", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "2ch: 「香具師」の意味", "category": "2ch"}
+{"task_id": "c09", "dir": "c09_ngo", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "なんJ: 語尾「〜ンゴ」の由来", "category": "nanj"}
+{"task_id": "c10", "dir": "c10_nanj", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "なんJ: 「なんJ」は何の略か", "category": "nanj"}
+{"task_id": "c11", "dir": "c11_ondul", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "空耳: オンドゥル語", "category": "other"}
+{"task_id": "c12", "dir": "c12_elshaddai", "grader": "qa", "domain": "culture", "difficulty": "cul_knowledge", "title": "ゲーム: 「そんな装備で大丈夫か？」の出典", "category": "other"}
+{"task_id": "c13", "dir": "c13_iiyo_blank", "grader": "constraint", "domain": "culture", "difficulty": "cul_completion", "title": "淫夢: 「いいよ！____！」穴埋め", "category": "inmu"}
+{"task_id": "c14", "dir": "c14_num_reading", "grader": "constraint", "domain": "culture", "difficulty": "cul_completion", "title": "淫夢: 114514 の読み下し", "category": "inmu"}
+{"task_id": "c15", "dir": "c15_810", "grader": "constraint", "domain": "culture", "difficulty": "cul_completion", "title": "淫夢: 810 が指す語", "category": "inmu"}
+{"task_id": "c16", "dir": "c16_nurupo_reply", "grader": "constraint", "domain": "culture", "difficulty": "cul_completion", "title": "2ch: ぬるぽ への定型レス (生成)", "category": "2ch"}
+{"task_id": "c17", "dir": "c17_ondul_translate", "grader": "constraint", "domain": "culture", "difficulty": "cul_completion", "title": "空耳: オンドゥル語の翻訳", "category": "other"}
+{"task_id": "c18", "dir": "c18_classify", "grader": "constraint", "domain": "culture", "difficulty": "cul_completion", "title": "認識: 淫夢由来の語を選り分ける", "category": "mixed"}
+{"task_id": "c19", "dir": "c19_yajuu_tone", "grader": "judge", "domain": "culture", "difficulty": "cul_generation", "title": "生成: 淫夢語録の口調で一言", "category": "inmu"}
+{"task_id": "c20", "dir": "c20_comment_mix", "grader": "judge", "domain": "culture", "difficulty": "cul_generation", "title": "生成: 114514 と やりますねぇ を使う", "category": "inmu"}
+{"task_id": "c21", "dir": "c21_nanj_jikkyou", "grader": "judge", "domain": "culture", "difficulty": "cul_generation", "title": "生成: なんJ風の実況レス", "category": "nanj"}
+{"task_id": "c22", "dir": "c22_daily_neta", "grader": "judge", "domain": "culture", "difficulty": "cul_generation", "title": "生成: 語録で日常をネタにする", "category": "inmu"}
+{"task_id": "c23", "dir": "c23_2ch_thread", "grader": "judge", "domain": "culture", "difficulty": "cul_generation", "title": "生成: 2ch風スレッド", "category": "2ch"}
+{"task_id": "c24", "dir": "c24_explain_beginner", "grader": "judge", "domain": "culture", "difficulty": "cul_generation", "title": "生成: 初心者向けに 114514 を解説 (拒否耐性)", "category": "inmu"}

@@ -100,6 +100,7 @@ results/
 | `n_tasks` | タスク数 |
 | `runs` | 1タスクあたりの試行回数 |
 | `usability` | `{autonomous, assisted, unusable}` のタスク数 |
+| `n_refused_tasks` / `n_refused_attempts` | セーフティ拒否があったタスク数 / 拒否試行の総数。0 でないランは「知らない」と「答えない」が混ざっている |
 | `avg_success_rate` | 平均成功率（=平均pass@1）。**多試行時のみ** |
 | `solved_any_rate` | N回中≥1成功したタスクの割合。**多試行時のみ** |
 | `avg_pass_at_k` | 平均pass@k。**多試行時のみ**（k=runsで退化する点に注意） |
@@ -109,9 +110,9 @@ results/
 | キー | 型 | 説明 |
 |---|---|---|
 | `task_id` | str | 例: `t001` |
-| `difficulty` | str | 台帳の `difficulty` をそのまま転記する自由文字列。コーディング7値（`easy` / `medium` / `hard` / `expert` / `frontier` / `architect` / `grandmaster`）+ ドメイン用8値（`sec_medium` / `sec_hard` / `gen_easy` / `gen_medium` / `write_basic` / `med_basic` / `med_std` / `med_hard`）の計15値。tier への対応は `certify.py` の `DIFFICULTY_TO_TIER` が正 |
+| `difficulty` | str | 台帳の `difficulty` をそのまま転記する自由文字列。コーディング7値（`easy` / `medium` / `hard` / `expert` / `frontier` / `architect` / `grandmaster`）+ ドメイン用11値（`sec_medium` / `sec_hard` / `gen_easy` / `gen_medium` / `write_basic` / `med_basic` / `med_std` / `med_hard` / `cul_knowledge` / `cul_completion` / `cul_generation`）の計18値。tier への対応は `certify.py` の `DIFFICULTY_TO_TIER` が正 |
 | `title` | str | タスクタイトル |
-| `domain` | str | `code` / `security` / `general` / `writing` / `medical`。既定 `"code"` |
+| `domain` | str | `code` / `security` / `general` / `writing` / `medical` / `culture`。既定 `"code"` |
 | `resolved` | bool | テスト合格判定（多試行では success_rate≥0.5） |
 | `quality_score` | float | 0–100。多試行では**成功試行の平均** |
 | `combined` | float | 0–100。`success_rate × (floor + (1-floor)×quality/100) × 100` |
@@ -120,7 +121,8 @@ results/
 | `parse_ok` / `parse_error` | bool/str | 代表試行のパース成否・理由 |
 | `runs` / `n_pass` | int | 試行回数 / 成功回数 |
 | `success_rate` / `pass_at_1` / `pass_at_k` | float | 成功率（=pass@1）/ pass@k |
-| `attempts` | array | 各試行の `{resolved, quality, combined, fail_reason}` |
+| `n_refused` / `refused` | int/bool | セーフティ拒否と判定された試行数 / 1回でも拒否があったか。**`resolved`・`success_rate` には影響しない**（不正解の内訳）。判定は不正解時のみ実施 |
+| `attempts` | array | 各試行の `{resolved, quality, combined, fail_reason, truncated, finish_reason, errored, skipped, refused}` |
 | `usability_tier` | str | `autonomous` / `assisted` / `unusable` |
 | `quality_components` | obj | 代表試行の ruff / complexity / … 内訳 |
 
@@ -331,12 +333,12 @@ cat "results/$adir/t011/llm_output.txt"
 | `config.yaml` | `model:auto`・`run.runs`/`sample_temp`/`ollama_host`・`usability:`・`ref-gpt` |
 | `tasks/` | 難タスク t016–t020 + **L4 expert t021–t032 / L5 frontier t033–t040**（既定40タスク）+ **L6 architect t041–t060（別台帳 `tasks_l6.jsonl`・`--with-l6` で有効化）** + **L7 grandmaster 現行16問（別台帳 `tasks_l7.jsonl`・`--with-l7` で有効化。v1残留9問（t063, t064, t068, t069, t076, t085, t092, t093, t095）+ 新規7問（t101–t107。3多重oracle 4問 + 大規模リファクタ/仕様推論 3問）。旧40問（5軸×8問構成。t098のみ `perf_timeout: 30`）は `tasks_l7_v1.jsonl` に退避、`--l7-ledger tasks_l7_v1.jsonl` で実行可）** |
 | `llmbench/clients/cli_agent.py` | **新規**。`type: cli` バックエンド（サブスクCLI: `claude`/`codex`/`grok`/`custom` プリセット）。空の一時cwdでheadless実行し、実行モデルを検出して `served_model` に記録 |
-| `llmbench/graders/` | **新規パッケージ**（マルチドメイン評価）。`__init__.py`（グレーダーレジストリ + `GradeCtx`/`GraderEval`）・`checks.py`（IFEval式チェック群）・`code.py`（既存パイプラインのラップ）・`detection.py`（security）・`constraint.py`（general）・`judge.py`（writing・experimental）・`qa.py`（medical・reference value）。各グレーダーは `(resolved, quality)` に正規化して返すため、既存の集計/pass@k/usability/certifyパイプラインは無改修 |
+| `llmbench/graders/` | **新規パッケージ**（マルチドメイン評価）。`__init__.py`（グレーダーレジストリ + `GradeCtx`/`GraderEval`）・`checks.py`（IFEval式チェック群）・`code.py`（既存パイプラインのラップ）・`detection.py`（security）・`constraint.py`（general）・`judge.py`（writing・experimental）・`qa.py`（medical・reference value）・`refusal.py`（セーフティ拒否の検出。qa/constraint/judge から呼ばれ、**不正解時のみ**判定して `GraderEval.refused` を立てる）。各グレーダーは `(resolved, quality)` に正規化して返すため、既存の集計/pass@k/usability/certifyパイプラインは無改修 |
 | `llmbench/cli.py`（マルチドメイン） | **`--with-sec/gen/write/med`・`--only-sec/gen/write/med`**（`--with-l6/l7`と同体系。list-tasks/run/validate共通の`_common_args`を拡張） |
 | `llmbench/certify.py`（マルチドメイン） | **ドメイン別ゲート**（`certify_domains`）・**バランス指数**（coding＋非experimentalドメインの調和平均）・**医療の難易度別(med_basic/med_std/med_hard)正答率readout** |
 | `llmbench/report.py`（マルチドメイン） | **「🌐 ドメイン別」**サマリ節を追加 |
 | `config.yaml`（マルチドメイン） | **`graders:`**（pass_f1/pass_ratio/pass_score）・**`quality.judge:`**（enabled/judge_model/seeds）・**`certify_domains:`** |
-| `tasks/`（マルチドメイン） | **ドメインタスク追加**: security s01–s04（別台帳`tasks_sec.jsonl`、`--with-sec`）/ general g01–g03（`tasks_gen.jsonl`、`--with-gen`）/ writing w01–w02（`tasks_write.jsonl`、`--with-write`）/ medical m01–m24（`tasks_med.jsonl`、`--with-med`。難易度 med_basic7/med_std11/med_hard6、全問ファクトチェック済） |
+| `tasks/`（マルチドメイン） | **ドメインタスク追加**: security s01–s04（別台帳`tasks_sec.jsonl`、`--with-sec`）/ general g01–g03（`tasks_gen.jsonl`、`--with-gen`）/ writing w01–w02（`tasks_write.jsonl`、`--with-write`）/ medical m01–m24（`tasks_med.jsonl`、`--with-med`。難易度 med_basic7/med_std11/med_hard6、全問ファクトチェック済）/ culture c01–c24（`tasks_culture.jsonl`、`--with-culture`。日本のネットミーム知識。cul_knowledge12/cul_completion6/cul_generation6、grader は qa/constraint/judge を流用） |
 
 > 検証状況: `llmbench validate` PASS（gold 40/40・broken 40/40）、selfcheck 既存20問 + **L6 20問 20/20** + **L7 16問 16/16**（v2。旧40問時代の記録は `TASKS.md` の「L7 v1」節を参照）、
 > `validate --with-l6` で gold 20/20・broken 20/20、`validate --with-l7` で gold 16/16・broken 16/16、
@@ -432,7 +434,7 @@ usability / certify は**一切変更せず**再利用される。
 - パッケージは `llmbench/graders/`（`__init__.py` = レジストリ + `GradeCtx`/`GraderEval`、`checks.py`、
   `code.py`、`detection.py`、`constraint.py`、`judge.py`、`qa.py`）に新設。
 
-### 10.2 4ドメインの概要
+### 10.2 5ドメインの概要
 
 | domain | grader | 台帳 | フラグ | 採点方式 |
 |---|---|---|---|---|
@@ -440,15 +442,16 @@ usability / certify は**一切変更せず**再利用される。
 | general | `constraint` | `tasks_gen.jsonl` | `--with-gen` / `--only-gen` | `--- ANSWER ---` 後の回答を `checks.json`（IFEval式: word_count/line_count/char_count/contains/not_contains/starts_with/ends_with/equals/regex/json_valid/json_path）で機械検証。`resolved = 全チェック通過`（`pass_ratio` 既定1.0）、`quality = 通過率×100` |
 | writing | `judge` | `tasks_write.jsonl` | `--with-write` / `--only-write` | **experimental**。`rubric.json` の `hard_constraints`（決定的ゲート、checkと同種kind）+ `criteria` + `pass_score`。judgeモデル設定時（`quality.judge.enabled`）は0-10点を`seeds`回平均し `quality=score×10`、`resolved=(score≥pass_score) かつ hard通過`。judge未設定時は `hard_constraints` のみで決定的判定（validate等はこの経路） |
 | medical | `qa` | `tasks_med.jsonl` | `--with-med` / `--only-med` | **参考値**。`gold.json` は `{"mode":"mcq","answer":"C"}`（選択肢一致）または `{"mode":"keyword","all":[...],"any":[...]}`（`all`を全て・`any`を1つ以上含む）。gold keywordは**日英両方**を含むため `--lang ja` の日本語モデルも正しく採点される |
+| culture | `qa`+`constraint`+`judge` | `tasks_culture.jsonl` | `--with-culture` / `--only-culture` | **参考値**。日本のネットミーム／ネットスラング（淫夢語録・なんJ・2ch・空耳ネタ）を **A.知識QA(`qa`, 12問) / B.補完・認識(`constraint`, 6問) / C.生成(`judge`, 6問)** の3層で測る。専用graderは持たず既存3種を流用し、台帳側で `domain: "culture"` を明示する。正答率とは**別に拒否率**を集計する（10.7参照） |
 
 ### 10.3 CLI
 
 `--with-l6`/`--with-l7`/`--only-l6`/`--only-l7` と同じ体系です。
 
-- `--with-sec` / `--with-gen` / `--with-write` / `--with-med` … 既定タスクにドメイン台帳を上乗せ
-- `--only-sec` / `--only-gen` / `--only-write` / `--only-med` … 既定タスクを除外し当該ドメインのみ実行
+- `--with-sec` / `--with-gen` / `--with-write` / `--with-med` / `--with-culture` … 既定タスクにドメイン台帳を上乗せ
+- `--only-sec` / `--only-gen` / `--only-write` / `--only-med` / `--only-culture` … 既定タスクを除外し当該ドメインのみ実行
 - `certify --merge` はドメイン結果を含む results.json にもそのまま使える
-- 自己検証: `llmbench validate --only-sec|gen|write|med`（gold全成功・broken全失敗、LLM不要）
+- 自己検証: `llmbench validate --only-sec|gen|write|med|culture`（gold全成功・broken全失敗、LLM不要）
 
 ### 10.4 config.yaml 追加キー
 
@@ -464,6 +467,11 @@ certify_domains:
   general:  {min_success: 0.7, min_combined: 65}
   writing:  {min_success: 0.5, min_combined: 55, experimental: true}
   medical:  {min_success: 0.6, min_combined: 60, reference: true}
+  culture:  {min_success: 0.5, min_combined: 50, reference: true}
+certify_culture:                 # 日本ネットミーム 種別別 参考gate (正答率)
+  cul_knowledge: 0.60
+  cul_completion: 0.50
+  cul_generation: 0.40
 ```
 
 ### 10.5 certify のドメイン出力
@@ -476,19 +484,43 @@ certify_domains:
   **調和平均**。1ドメインだけ弱い「一芸特化」モデルを算術平均より強く減点する
 - **医療detail readout**: 全体正答率 + 難易度別（med_basic/med_std/med_hard）正答率。5択MCQのチャンス
   正答率が約20%であること、医療は臨床的妥当性の保証ではなく**参考値**であることを併記
+- **ネットミームdetail readout**: 全体正答率 + 種別別（cul_knowledge/cul_completion/cul_generation）の
+  正答率と**拒否率**。拒否率が高いモデルの低い正答率は「知らない」ではなく「答えない」ことを意味する
 
-`report.md` にも「🌐 ドメイン別」サマリ節が追加される。出力例と詳しい読み方は `USAGE.md` を参照。
+`report.md` にも「🌐 ドメイン別」サマリ節（拒否タスク数の列を含む）が追加される。出力例と詳しい読み方は `USAGE.md` を参照。
 
 ### 10.6 運用上の注意
 
-- writing/medical のゲート閾値は暫定（未較正）。ドメイン別ゲートの既定値は `llmbench/certify.py` の
-  `DEFAULT_DOMAIN_GATES` / `DEFAULT_MED_GATES` です。`config.yaml` の `certify_domains:` /
-  `certify_medical:` で上書きするには、`llmbench certify --config config.yaml <results.json>` の
-  ように `--config` を明示してください（省略時は既定値が使われます）。
+- writing/medical/culture のゲート閾値は暫定（未較正）。ドメイン別ゲートの既定値は `llmbench/certify.py` の
+  `DEFAULT_DOMAIN_GATES` / `DEFAULT_MED_GATES` / `DEFAULT_CUL_GATES` です。`config.yaml` の
+  `certify_domains:` / `certify_medical:` / `certify_culture:` で上書きするには、
+  `llmbench certify --config config.yaml <results.json>` のように `--config` を明示してください
+  （省略時は既定値が使われます）。
 - judge を有効化する場合、self-preference回避のため候補モデルとは別系統の `judge_model` を推奨。
 - 医療タスク（m01–m24）は薬理/循環器/救急・第一選択/内分泌/感染症/腎・生理/神経/小児/産婦人科/検査・中毒の
   10領域、難易度 med_basic 7問 / med_std 11問 / med_hard 6問。全問ゴールドは独立にファクトチェック済み。
 - ドメインタスクの一覧・ディレクトリ構成・goldスキーマは `TASKS.md` を参照。
+- culture タスク（c01–c24）は淫夢語録12問 / なんJ3問 / 2ch4問 / 空耳・ゲーム系4問 / 混在1問。
+  ミームは陳腐化するため定期的な棚卸しが必要（回転の速いVTuber用語などは意図的に除外している）。
+
+### 10.7 拒否 (refusal) の検出と集計
+
+「知らないから答えられない」と「知っているが答えない」は別の失敗である。両方を一律に不正解として
+数えると、セーフティが発火しやすい題材では知識量の比較がそのまま「どれだけ拒否しないか」の比較に
+すり替わる。そこで `llmbench/graders/refusal.py` が定型の拒否句（日英）を検出し、qa / constraint /
+judge の3グレーダーから呼ばれる。
+
+| 項目 | 仕様 |
+|---|---|
+| 判定タイミング | **`resolved=False` のときだけ**。正解中の「なお不適切な文脈で使われることもあります」を拒否と誤検出しないため |
+| 判定対象テキスト | `--- ANSWER ---` 以降（マーカーが無ければ全文）。空なら生出力にフォールバック |
+| スコアへの影響 | **なし**。`resolved` / `success_rate` / `combined` は一切変わらない（拒否も「解けなかった」の一種） |
+| 「分かりません」 | 拒否と区別し、`quality_components["refusal"]["unknown"]` にのみ記録する |
+| 記録先 | `GraderEval.refused` → `Attempt.refused` → `TaskResult.{refused, n_refused}` → results.json / summary の `n_refused_tasks` `n_refused_attempts` |
+| 失敗理由 | `fail_reason` の先頭に `refusal: ` が付く |
+
+culture 以外のドメインでも同じ機構が働く（拒否が起きなければ全て 0 のまま）。旧 results.json は
+`n_refused` を持たないため、`certify` は拒否率 0% として扱う。
 
 ---
 

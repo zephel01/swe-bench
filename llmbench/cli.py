@@ -71,6 +71,7 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
         ("gen", "general 一般タスク/指示追従"),
         ("write", "writing 創作 (experimental)"),
         ("med", "medical QA (参考値)"),
+        ("culture", "culture 日本のネットミーム知識 (参考値)"),
     ):
         parser.add_argument(
             f"--with-{dom}", action="store_true", dest=f"with_{dom}",
@@ -89,6 +90,7 @@ _DOMAIN_LEDGERS = {
     "gen": "tasks_gen.jsonl",
     "write": "tasks_write.jsonl",
     "med": "tasks_med.jsonl",
+    "culture": "tasks_culture.jsonl",
 }
 
 
@@ -96,7 +98,7 @@ def _ledgers(args) -> list[str]:
     """実行対象の台帳リストを決める.
 
     優先規則:
-      - `--only-l6` / `--only-l7` / `--only-{sec,gen,write,med}` のいずれかが
+      - `--only-l6` / `--only-l7` / `--only-{sec,gen,write,med,culture}` のいずれかが
         指定されたら「only モード」(tier 台帳だけでなくドメイン台帳の
         `--only-*` でも起動する)。
         既定台帳 tasks.jsonl を除外し、要求された台帳だけを対象にする。
@@ -243,7 +245,7 @@ def cmd_compare(args) -> int:
     return 0
 
 
-def _certify_gates(args) -> tuple[dict | None, dict | None]:
+def _certify_gates(args) -> tuple[dict | None, dict | None, dict | None]:
     """config.yaml から certify 用のゲート設定を読む (失敗しても落とさない).
 
     certify は results.json さえあれば動くのが利点なので、config が無い/壊れて
@@ -255,10 +257,11 @@ def _certify_gates(args) -> tuple[dict | None, dict | None]:
     except Exception as e:
         print(f"⚠️  config を読めないため既定ゲートを使います ({path}: {e})",
               file=sys.stderr)
-        return None, None
+        return None, None, None
     dom = cfg.get("certify_domains") or None
     med = cfg.get("certify_medical") or None
-    return dom, med
+    cul = cfg.get("certify_culture") or None
+    return dom, med, cul
 
 
 def cmd_certify(args) -> int:
@@ -266,11 +269,12 @@ def cmd_certify(args) -> int:
     import json
 
     from .certify import (
-        certify, certify_domains, certify_medical, merge_results,
-        render_certificate_md, render_domains_md, render_medical_md,
+        certify, certify_culture, certify_domains, certify_medical,
+        merge_results, render_certificate_md, render_culture_md,
+        render_domains_md, render_medical_md,
     )
 
-    dom_gates, med_gates = _certify_gates(args)
+    dom_gates, med_gates, cul_gates = _certify_gates(args)
 
     def _emit(results: list[dict], model: str) -> None:
         print(render_certificate_md(certify(results), model))
@@ -280,6 +284,9 @@ def cmd_certify(args) -> int:
         med = render_medical_md(certify_medical(results, med_gates))
         if med:
             print("\n" + med)
+        cul = render_culture_md(certify_culture(results, cul_gates))
+        if cul:
+            print("\n" + cul)
         print()
 
     if getattr(args, "merge", False):
@@ -423,7 +430,7 @@ def main() -> None:
     p_cert.add_argument("results", nargs="+", help="判定する results.json")
     p_cert.add_argument(
         "--config", default="config.yaml",
-        help="ゲート設定 (certify_domains / certify_medical) を読む config。"
+        help="ゲート設定 (certify_domains / certify_medical / certify_culture) を読む config。"
              "読めない場合は既定ゲートにフォールバックする",
     )
     p_cert.add_argument(

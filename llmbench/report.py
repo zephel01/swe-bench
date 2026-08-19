@@ -367,20 +367,25 @@ def render_markdown(run) -> str:
         lines.append(f"| {diff} | {solved}/{len(rs)} | {avg_q} |")
 
     # ドメイン別集計 (コーディング以外の grader が混在する場合のみ)
-    domains = [d for d in ("security", "general", "writing", "medical")
+    domains = [d for d in ("security", "general", "writing", "medical", "culture")
                if any(getattr(r, "domain", "code") == d for r in run.results)]
     if domains:
         _dlabel = {"security": "🛡️ security", "general": "📋 general",
-                   "writing": "✍️ writing", "medical": "🩺 medical"}
+                   "writing": "✍️ writing", "medical": "🩺 medical",
+                   "culture": "🇯🇵 culture"}
         lines += ["", "## 🌐 ドメイン別 (コーディング以外)", "",
-                  "| Domain | Resolved | 平均成功率 | 平均combined |", "|---|---|---|---|"]
+                  "| Domain | Resolved | 平均成功率 | 平均combined | 拒否 |",
+                  "|---|---|---|---|---|"]
         for d in domains:
             rs = [r for r in run.results if getattr(r, "domain", "code") == d]
             solved = sum(r.resolved for r in rs)
             sr = sum(r.success_rate for r in rs) / len(rs) * 100
             cb = sum(r.combined for r in rs) / len(rs)
+            # 拒否は「知らない」ではなく「答えなかった」。正答率と分けて出す。
+            nref = sum(1 for r in rs if getattr(r, "refused", False))
             lines.append(
-                f"| {_dlabel[d]} | {solved}/{len(rs)} | {sr:.0f}% | {cb:.1f} |"
+                f"| {_dlabel[d]} | {solved}/{len(rs)} | {sr:.0f}% | {cb:.1f} | "
+                f"{nref}/{len(rs)} |"
             )
 
     # タスク別の詳細 (生成物・品質内訳)

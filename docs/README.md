@@ -18,6 +18,7 @@
 | CI に組み込みたい | [MANUAL.md](MANUAL.md) 5章 |
 | タスクを追加・修正したい | [TASKS.md](TASKS.md) |
 | コーディング以外の採点軸を足したい | [DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) |
+| 日本のネットミーム知識・拒否率を測りたい | [../README.md](../README.md#-日本ネットミーム-ベンチ-culture) / [TASKS.md](TASKS.md) |
 | `--ctx-size` や量子化の選び方を決めたい | [GGUF_PROBE.md](GGUF_PROBE.md) |
 | GPU を回す前に「この量子化は載るか」を知りたい | [GGUF_PROBE.md](GGUF_PROBE.md)「実用的な使い方」 |
 | いつ何が変わったか調べたい | [CHANGES.md](CHANGES.md) |
@@ -45,7 +46,8 @@ grader 別のディレクトリ構成と gold スキーマ。**タスクを足�
 ### 📐 [DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) — マルチドメイン拡張 仕様書
 
 コーディング以外を測る **pluggable grader** の設計。
-detection（脆弱性検出）/ constraint（指示追従）/ judge（創作）/ qa（医療QA）。
+detection（脆弱性検出）/ constraint（指示追従）/ judge（創作）/ qa（医療QA）、
+および既存graderを流用する culture（日本ネットミーム知識＋拒否検出）。
 
 ### 🔍 [GGUF_PROBE.md](GGUF_PROBE.md) — `gguf_probe` と `gguf_plan` の使い方
 

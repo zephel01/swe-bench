@@ -1,0 +1,37 @@
+[
+  {
+    "kind": "json_valid",
+    "desc": "JSON として妥当"
+  },
+  {
+    "kind": "contains",
+    "text": "やりますねぇ",
+    "desc": "やりますねぇ を含む"
+  },
+  {
+    "kind": "contains",
+    "text": "イキスギィ",
+    "desc": "イキスギィ を含む"
+  },
+  {
+    "kind": "contains",
+    "text": "ンアッー",
+    "desc": "ンアッー を含む"
+  },
+  {
+    "kind": "not_contains",
+    "text": "ぬるぽ",
+    "desc": "ぬるぽ を含まない"
+  },
+  {
+    "kind": "not_contains",
+    "text": "ググれカス",
+    "desc": "ググれカス を含まない"
+  },
+  {
+    "kind": "char_count",
+    "min": 10,
+    "max": 150,
+    "desc": "配列のみ (10-150字)"
+  }
+]

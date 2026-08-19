@@ -14,6 +14,7 @@ import json
 import re
 
 from . import GradeCtx, Grader, GraderEval
+from . import refusal as _refusal
 from .checks import extract_answer, run_checks
 
 _SYSTEM = """\
@@ -100,6 +101,7 @@ class JudgeGrader(Grader):
             )
             if not ev.resolved:
                 ev.fail_reason = f"hard constraints failed: {hard_failed}"
+            _refusal.apply(ev, answer, raw_output)
             return ev
 
         # judge あり → seeds 回採点して平均
@@ -121,6 +123,7 @@ class JudgeGrader(Grader):
             comp["note"] = "judge produced no parseable score; fell back to hard gate"
             ev.components = {"judge": comp}
             ev.detail_output = "judge unparseable; hard gate only"
+            _refusal.apply(ev, answer, raw_output)
             return ev
         mean = sum(scores) / len(scores)
         comp.update({
@@ -136,6 +139,7 @@ class JudgeGrader(Grader):
         )
         if not ev.resolved:
             ev.fail_reason = f"judge {mean:.1f} < {pass_score}"
+        _refusal.apply(ev, answer, raw_output)
         return ev
 
     def mock_gold(self, task) -> str:
