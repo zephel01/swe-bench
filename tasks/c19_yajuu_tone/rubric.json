@@ -33,6 +33,23 @@
       "kind": "not_contains",
       "text": "お答えできません",
       "desc": "拒否していない"
+    },
+    {
+      "kind": "regex",
+      "pattern": "(暑|熱|冷房|エアコン|夏|猛暑|汗|溶け|サウナ|気温)",
+      "desc": "お題(暑さ)に触れている"
+    },
+    {
+      "kind": "regex",
+      "pattern": "(.)\\1{7,}",
+      "negate": true,
+      "desc": "同一文字の8連続が無い"
+    },
+    {
+      "kind": "regex",
+      "pattern": "(.{4,}?)\\1{2,}",
+      "negate": true,
+      "desc": "同じ断片の3回連続が無い (語録の羅列よけ)"
     }
   ]
 }
