@@ -26,7 +26,7 @@
 - 🎲 **信頼性 (pass@k)** — `--runs N` で各タスクをN回試行し、成功率(pass@1)・pass@k・フレ(flaky)を計測。「1回成功＝使える」ではなく**安定して使えるか**を測る
 - 🧭 **usability判定** — 信頼性×品質から各タスクを **🟢自律 / 🟡補助 / 🔴不可** に分類し、「実際どれくらい任せられるか」を提示
 - 🎓 **使えるライン認証 (`certify`)** — 難易度を tier(L1-L7) にマップし、tierごとの合格判定で「ここまでクリアできれば使える」を提示。**L4(expert)独立合格＝実務投入ライン**。最上位帯の頭打ちを測る **L7(grandmaster)** は天井評価帯。分割実行した複数 results.json は `certify --merge` で1つの認証に統合可
-- 🌐 **マルチドメイン評価** — コーディング以外も測る **pluggable grader**。**detection**(脆弱性/ログ検出＝F1採点＋過検出デコイ)・**constraint**(指示追従＝IFEval式の機械検証)・**judge**(創作＝rubric採点)・**qa**(医療QA＝日英アンサーキー)。`--with-sec/gen/write/med` で上乗せ、`certify` はドメイン別ゲート＋**バランス指数**(一芸特化を炙り出す)を出力。設計は [📐 DESIGN_DOMAINS.md](docs/DESIGN_DOMAINS.md)
+- 🌐 **マルチドメイン評価** — コーディング以外も測る **pluggable grader**。**detection**(脆弱性/ログ検出＝F1採点＋過検出デコイ)・**constraint**(指示追従＝IFEval式の機械検証)・**judge**(創作＝rubric採点)・**qa**(医療QA＝日英アンサーキー)・**culture**(日本のネットミーム知識＝知識QA/補完/生成の3層＋**拒否率**)。`--with-sec/gen/write/med/culture` で上乗せ、`certify` はドメイン別ゲート＋**バランス指数**(一芸特化を炙り出す)を出力。設計は [📐 DESIGN_DOMAINS.md](docs/DESIGN_DOMAINS.md)
 - ⚖️ **複合スコア** — 動かないコードは0点。動くコードを成功率と品質で差別化
 - 🔌 **接続自在** — OpenAI互換API (llama.cpp / LM Studio / vLLM) と Ollama 両対応。**`model: auto`** でサーバのロード中モデルを自動採用（config編集不要）、Ollamaは**インストール済みモデルを動的に選択**。さらに **`type: cli`** で公式エージェントCLI (claude / codex / grok) を**サブスク定額枠のままヘッドレス実行**（従量APIキー不要。エージェント込み計測になる点は [USAGE 3.5](docs/USAGE.md) 参照）
 - 🆚 **モデル横断比較** — `compare` で複数結果を1枚のランキング・マトリクスに。参照モデル(API)を併置して位置づけ
@@ -46,7 +46,7 @@ pip install -e .
 
 # 1️⃣ 自己検証 (LLM不要 — モックでパイプライン全体を確認)
 llmbench validate
-llmbench validate --only-sec        # ドメインだけの自己検証もできる (sec/gen/write/med)
+llmbench validate --only-sec        # ドメインだけの自己検証もできる (sec/gen/write/med/culture)
 
 # 2️⃣ config.yaml の base_url を自分の環境に。model は "auto" でOK（サーバのモデルを自動採用）
 
@@ -68,6 +68,7 @@ llmbench run --model local-openai --tasks t021,t033 --lang ja   # 新tierだけ�
 llmbench run --model local-openai --with-sec --with-gen --runs 5   # security/general を上乗せ
 llmbench run --model local-openai --only-sec --runs 5              # セキュリティ検出だけ単体実行
 llmbench run --model <医療モデル>  --only-med --lang ja --runs 5    # 医療QAだけ日本語で測定
+llmbench run --model local-openai --only-culture --lang ja --runs 3 # 日本のネットミーム知識だけ測定
 
 # 5️⃣ 複数結果を横断比較
 llmbench compare results/*_results.json
@@ -207,10 +208,11 @@ L6 の閾値は 2026-06-26 の実モデル較正で確定済み。L7 の閾値�
 | 📋 general | `constraint` | `tasks_gen.jsonl` / `--with-gen` `--only-gen` | 文字数・JSON妥当性・正規表現などを**プログラム検証** (IFEval式)。全チェック通過で成功、通過率が quality。コーダー特化モデルの「一般退化」が出る |
 | ✍️ writing | `judge` | `tasks_write.jsonl` / `--with-write` `--only-write` | rubric + judgeモデルで 0–10 採点（**experimental**）。judgeが無い時は hard制約(文字数等)のみで決定的に判定 |
 | 🩺 medical | `qa` | `tasks_med.jsonl` / `--with-med` `--only-med` | 医療QAをアンサーキー照合 (MCQ=選択肢, 短答=キーワード)。gold に**日英両方の許容語**を入れており `--lang ja` の日本語モデルも正答扱い。**参考値** |
+| 🇯🇵 culture | `qa`+`constraint`+`judge` | `tasks_culture.jsonl` / `--with-culture` `--only-culture` | 日本固有のネットミーム／ネットスラング (淫夢語録・なんJ・2ch・空耳ネタ等) を **A.知識QA / B.補完・認識 / C.生成** の3層で測る。正答率とは**別に拒否率**を集計する。**参考値** |
 
 - **CLI**: `--with-*` で既定タスクに上乗せ、`--only-*` で当該ドメインだけ単体実行（`--with-l6/l7` と同体系）。`certify --merge` で分割結果を統合。
-- **certify 拡張**: ドメイン別ゲート判定に加え、coding＋非experimentalドメインの平均combinedの**調和平均＝バランス指数**を算出（あるドメインだけ低い一芸特化モデルを大きく減点）。医療は難易度別(basic/std/hard)の正答率も表示。
-- **自己検証**: `llmbench validate --only-sec|gen|write|med` で gold が全問成功・broken が全問失敗することを確認できる（LLM不要）。
+- **certify 拡張**: ドメイン別ゲート判定に加え、coding＋非experimentalドメインの平均combinedの**調和平均＝バランス指数**を算出（あるドメインだけ低い一芸特化モデルを大きく減点）。医療は難易度別(basic/std/hard)の正答率も表示。culture は種別別(knowledge/completion/generation)の正答率と**拒否率**を併記。
+- **自己検証**: `llmbench validate --only-sec|gen|write|med|culture` で gold が全問成功・broken が全問失敗することを確認できる（LLM不要）。
 - **judge を有効化**する場合は `config.yaml` の `quality.judge.enabled: true` と `judge_model` を設定（self-preference 回避のため候補モデルと別系統を推奨）。
 
 > [!NOTE]
@@ -218,6 +220,65 @@ L6 の閾値は 2026-06-26 の実モデル較正で確定済み。L7 の閾値�
 > `DEFAULT_DOMAIN_GATES` が既定値で、`config.yaml` の `certify_domains:` で上書きできます
 > (`llmbench certify --config config.yaml` を指定した場合)。医療の難易度別gateは `DEFAULT_MED_GATES` で調整可能。
 > 医療は臨床的妥当性の保証ではなく、5択MCQのチャンス正答率(約20%)を踏まえた**参考値**として扱う。
+> culture (日本ネットミーム) も同様に**参考値**。加えて出典がアダルト作品由来の語を含むため、
+> セーフティの強いモデルは「知らない」のではなく「答えない」。低い正答率を知識量と読み替えないよう、
+> **必ず拒否率とセットで見ること**（[🇯🇵 日本ネットミーム ベンチ](#-日本ネットミーム-ベンチ-culture) 参照）。
+
+## 🇯🇵 日本ネットミーム ベンチ (culture)
+
+日本語圏でしか通用しないネットミーム／ネットスラングを、**知っているか**と**使えるか**に
+分けて測る 24 問。既存の日本語 LLM ベンチ (Nejumi, JamC-QA 等) がカバーしていない帯域で、
+「日本語 Web データをどれだけ食っているか」と「セーフティがどこで発火するか」を同時に炙り出す。
+
+```bash
+llmbench validate --only-culture                                  # 自己検証 (LLM不要)
+llmbench run --model local-openai --only-culture --lang ja --runs 3
+llmbench certify --config config.yaml results/<...>_results.json
+```
+
+### 構成 (24問)
+
+| 種別 | difficulty | grader | 問数 | 測るもの | 例 |
+|---|---|---|---|---|---|
+| **A. 知識QA** | `cul_knowledge` | `qa` | 12 | 用語の意味・由来を正しく答えられるか (MCQ 6 / 短答 6) | 「114514 は何の語呂合わせか」「〜ンゴ の由来は」 |
+| **B. 補完・認識** | `cul_completion` | `constraint` | 6 | 定型の続きを出せるか／由来ごとに選り分けられるか (全て機械検証) | 「いいよ！____！」の穴埋め、淫夢由来の語だけを JSON 配列で抽出 |
+| **C. 生成** | `cul_generation` | `judge` | 6 | 文脈に馴染ませて**使える**か (羅列でないか) | 語録の口調で「今日は暑い」を言い換える、なんJ風の実況レス |
+
+カテゴリは `inmu`(淫夢語録) / `nanj`(なんJ) / `2ch`(2ch・5ch) / `other`(空耳・ゲーム系) / `mixed`。
+問題文は日英2種 (`issue_ja.md` / `issue.md`) を持ち、`--lang ja` で日本語版が使われる。
+短答の gold は日英どちらの表記でも正答になるよう許容語を並べてある。
+
+### 拒否 (refusal) を別カウントする
+
+このドメインは出典がアダルト作品由来の語を含むため、**セーフティの強いモデルは
+「知らない」のではなく「答えない」**。両方を一律に不正解として数えると、知識量の比較が
+そのまま「どれだけ拒否しないか」の比較にすり替わる。
+
+そこで grader は不正解の内訳として `refused` を立てる (`llmbench/graders/refusal.py`)。
+
+- `resolved` / `success_rate` には**影響しない**（拒否も「解けなかった」ではある）
+- results.json に `n_refused` / `refused`、summary に `n_refused_tasks` / `n_refused_attempts`
+- `certify` は種別別に **正答率と拒否率を併記**する
+- 判定は**不正解のときにだけ**走る（正解中の「なお不適切な文脈で使われることもあります」を拒否と数えないため）
+- 「分かりません」は拒否とは区別する（`unknown` として components にだけ残す）
+
+```
+| 種別 | 問題数 | 正答率 | 拒否率 | 参考gate |
+|---|---|---|---|---|
+| CUL-knowledge 知識QA | 12 | 58% ⚠️ | 8% | ≥60% |
+| CUL-completion 補完/認識 | 6 | 50% ✅ | 17% | ≥50% |
+| CUL-generation 生成 | 6 | 17% ⚠️ | 67% | ≥40% |
+```
+
+### 読み方の注意
+
+- **能力ではなく性格の指標**。学習コーパスの偏り (日本語 Web データ量) とアライメント設定を
+  強く反映するので、既定でバランス指数から除外している (`reference: true`)。
+- **ゲート閾値は未較正**。`config.yaml` の `certify_culture:` で調整できる。
+- **ミームは陳腐化する**。VTuber 用語のような回転の速い語は意図的に入れていないが、
+  それでも定期的な棚卸しが必要。
+- **C. 生成は judge 依存**。`quality.judge.enabled: false` のままだと hard 制約
+  (文字数・必須語) のみの決定的判定になる。judge を立てるときは候補モデルと別系統を使うこと。
 
 ## ⚙️ 設定
 
@@ -277,6 +338,12 @@ certify_domains:           # ドメイン別「使えるライン」ゲート (�
   general:  {min_success: 0.7, min_combined: 65}
   writing:  {min_success: 0.5, min_combined: 55, experimental: true}
   medical:  {min_success: 0.6, min_combined: 60, reference: true}
+  culture:  {min_success: 0.5, min_combined: 50, reference: true}
+
+certify_culture:           # 日本ネットミーム 種別別 参考gate (正答率)
+  cul_knowledge:  0.60
+  cul_completion: 0.50
+  cul_generation: 0.40
 ```
 
 > [!TIP]
@@ -305,10 +372,21 @@ certify_domains:           # ドメイン別「使えるライン」ゲート (�
     reasoning_max_tokens: 16384   # 思考そのものの上限 (null = 無効)
 ```
 
-どちらも **本文が1文字も出ていない間だけ** 働きます。本文を書き始めた生成は
-決して打ち切らないので、`import` が並ぶコードや dict リテラルを「反復」と
-誤判定して正常な生成を殺すことはありません。実測で 179,320 文字 → **約 8,000 文字**
+判定は2段構えです。
+
+| 段 | 対象 | しきい値 | 打ち切り後の扱い |
+|---|---|---|---|
+| 本文が出る前 | 思考の反復 / 思考トークン上限 | 8,000 文字 | 思考は捨てる（縮退テキストから抽出できるコードは無い） |
+| 本文が出た後 | 本文の反復 | 16,000 文字 | **本文は捨てない**（縮退より前の正しいブロックを grader に見せる） |
+
+本文側のしきい値は、実測の正答サイズ（t048 で 2,109〜2,449 バイト）の約7倍です。
+正常な答えには絶対に届きません。実測で思考側は 179,320 文字 → **約 8,000 文字**
 で打ち切れます (1試行 150秒 → 約7秒)。
+
+`content` 中の `<think>…</think>` は思考として扱います。llama.cpp の
+`--reasoning-format` 次第では、**非ストリームでは分離されるのにストリームでは
+`content` に流れてくる**ことがあり、そのままだと最初の思考トークンで
+`content` が非空になってガードが1トークン目から無効化されるためです。
 
 **② runner 側 — 残りの試行を省く** (`run.fail_fast`, 既定 `true`):
 
@@ -378,6 +456,7 @@ swe-bench/
 │                       #    + tasks_l7.jsonl (L7 grandmaster 16問, --with-l7)
 │                       #    + tasks_l7_v1.jsonl (旧L7 40問, t061–t100。退避済み。--l7-ledger tasks_l7_v1.jsonl で再実行可)
 │                       #    + tasks_sec/gen/write/med.jsonl (ドメイン, --with-sec/gen/write/med)
+│                       #    + tasks_culture.jsonl (日本ネットミーム 24問, --with-culture/--only-culture)
 ├── tests/              # ✅ pytestユニットテスト (certify --merge / cli_agent / 接続 / 台帳ロード)
 ├── docs/               # 📚 ドキュメント一式。索引は docs/README.md
 │   ├── USAGE.md        #    📘 実行手順と結果の読み解き方
@@ -432,9 +511,15 @@ qa=`gold.json`のキー)。スキーマと採点規約は [📐 DESIGN_DOMAINS.m
 {"task_id":"s01","dir":"s01_name","grader":"detection","domain":"security","difficulty":"sec_medium","title":"..."}
 {"task_id":"g01","dir":"g01_name","grader":"constraint","domain":"general","difficulty":"gen_easy","title":"..."}
 {"task_id":"m01","dir":"m01_name","grader":"qa","domain":"medical","difficulty":"med_std","title":"..."}
+{"task_id":"c01","dir":"c01_name","grader":"qa","domain":"culture","difficulty":"cul_knowledge","title":"...","category":"inmu"}
 ```
 
-検証は `llmbench validate --only-sec|gen|write|med` (対象台帳のみ)。
+検証は `llmbench validate --only-sec|gen|write|med|culture` (対象台帳のみ)。
+
+culture ドメインは専用 grader を持たず、既存の `qa` / `constraint` / `judge` を使い回して
+台帳側で `domain: "culture"` を明示する。`difficulty` は `cul_knowledge` / `cul_completion` /
+`cul_generation` の3種で、certify の種別別集計のキーになる。`category` は人間向けの分類
+(`inmu` / `nanj` / `2ch` / `other` / `mixed`) で、ローダは無視する。
 
 ## 🗺️ ロードマップ
 
@@ -453,6 +538,7 @@ qa=`gold.json`のキー)。スキーマと採点規約は [📐 DESIGN_DOMAINS.m
 - [x] 🔀 分割実行 (`--only-l6`/`--only-l7`) と `certify --merge` による統合認証
 - [x] 🌐 マルチドメイン評価 (pluggable grader: security/general/writing/medical) + ドメイン別certify・バランス指数
 - [x] 🩺 医療QA 24問 (日英対応・独立ファクトチェック済) — 参考値
+- [x] 🇯🇵 日本ネットミーム 24問 (知識QA12/補完6/生成6) + 拒否(refusal)検出・拒否率集計 — 参考値
 - [ ] 🎯 実モデル較正による tier / ドメインゲート閾値の確定 (32b dense / 3b級を追加・L7・judge・医療 gate 確定)
 - [ ] ✍️ judge の多系統化と judge一致率の本採用 (writing の較正)
 - [ ] 🐳 Docker隔離実行

@@ -15,6 +15,7 @@ import json
 import re
 
 from . import GradeCtx, Grader, GraderEval
+from . import refusal as _refusal
 from .checks import extract_answer
 
 _SYSTEM = """\
@@ -63,6 +64,7 @@ class QaGrader(Grader):
             ev.detail_output = f"MCQ got={got} want={want}"
             if not ok:
                 ev.fail_reason = f"MCQ answer {got} != {want}"
+            _refusal.apply(ev, answer, raw_output)
             return ev
 
         # keyword mode
@@ -86,6 +88,7 @@ class QaGrader(Grader):
         ev.detail_output = f"keyword all_ok={all_ok} any_ok={any_ok}"
         if not ok:
             ev.fail_reason = "missing required keyword(s)"
+        _refusal.apply(ev, answer, raw_output)
         return ev
 
     def mock_gold(self, task) -> str:

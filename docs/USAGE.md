@@ -885,9 +885,10 @@ llmbench run --model <model> --tasks t011,t013
 
 ## 16. マルチドメイン評価を実行する
 
-コーディング以外の能力（セキュリティ検出・指示追従・創作・医療QA）は、`--with-l6`/`--with-l7` と
-同じ体系のフラグで評価します。既定の40タスクとは別台帳（`tasks_sec.jsonl` / `tasks_gen.jsonl` /
-`tasks_write.jsonl` / `tasks_med.jsonl`）に格納されており、フラグを付けない限り実行対象になりません。
+コーディング以外の能力（セキュリティ検出・指示追従・創作・医療QA・日本のネットミーム知識）は、
+`--with-l6`/`--with-l7` と同じ体系のフラグで評価します。既定の40タスクとは別台帳
+（`tasks_sec.jsonl` / `tasks_gen.jsonl` / `tasks_write.jsonl` / `tasks_med.jsonl` /
+`tasks_culture.jsonl`）に格納されており、フラグを付けない限り実行対象になりません。
 各グレーダーは最終的に `(resolved, quality)` に正規化されるため、`--runs`・usability・compare・certify
 は既存タスクと全く同じ手順で使えます。ドメインの詳細な採点方式は `MANUAL.md` の10章、タスク一覧は
 `TASKS.md` を参照してください。
@@ -903,6 +904,9 @@ llmbench run --model local-openai --only-write --runs 5
 
 # 医療QAを日本語モデルで単体実行（gold keywordは日英両対応なので --lang ja でも正しく採点される）
 llmbench run --model local-openai --only-med --lang ja --runs 5
+
+# 日本のネットミーム知識（淫夢語録・なんJ・2ch・空耳ネタ）を単体実行
+llmbench run --model local-openai --only-culture --lang ja --runs 3
 ```
 
 自己検証（LLM接続不要。タスクを自作/変更した直後にも使える）:
@@ -912,6 +916,7 @@ llmbench validate --only-sec
 llmbench validate --only-gen
 llmbench validate --only-write
 llmbench validate --only-med
+llmbench validate --only-culture
 ```
 
 各ドメインとも、gold相当の出力を返すモックが全問成功、broken相当が全問失敗すれば健全です。
@@ -926,6 +931,11 @@ llmbench run --model local-openai --only-med --lang ja --runs 5 --output results
 llmbench certify --merge results/<stamp1>_<model>_results.json \
                   results/<stamp2>_<model>_results.json                            # 3. 統合認証
 ```
+
+> **culture (日本ネットミーム) は正答率と拒否率をセットで読んでください。** 出典にアダルト作品由来の
+> 語を含むため、セーフティの強いモデルは「知らない」のではなく「答えない」ことがあります。低い正答率を
+> そのまま知識量と読み替えると、実際には「拒否率の比較」を見ていることになります。C. 生成の6問は judge
+> grader なので、judge 未設定なら `hard_constraints`（文字数・必須語）のみの決定的判定になります。
 
 > **writing (`judge` grader) は experimental です。** `config.yaml` の `quality.judge.enabled: true` と
 > `judge_model` を設定しないと、決定的な `hard_constraints`（文字数など）のみで判定されます
@@ -948,9 +958,10 @@ llmbench certify --merge results/<stamp1>_<model>_results.json \
 | 📋 general 指示追従 | 3 | 81% | 75.2 | ≥70% / ≥65 | ✅合格 |
 | ✍️ writing 創作 *(experimental)* | 2 | 55% | 58.0 | ≥50% / ≥55 | ✅合格 |
 | 🩺 medical QA *(experimental)* | 24 | 67% | 63.1 | ≥60% / ≥60 | ✅合格 |
+| 🇯🇵 culture ネットミーム *(experimental)* | 24 | 46% | 44.2 | ≥50% / ≥50 | ❌不合格 |
 
 **⚖️ バランス指数: 71.2 / 100** （code + security + general の調和平均。一芸特化＝あるドメインだけ低いと大きく下がる）
-> writing/medical は experimental/参考値のため、既定でバランス指数から除外。
+> writing/medical/culture は experimental/参考値のため、既定でバランス指数から除外。
 
 ## 🩺 medical QA 詳細 (参考値・未較正)
 
@@ -962,6 +973,17 @@ llmbench certify --merge results/<stamp1>_<model>_results.json \
 | MED-basic 基礎 | 7 | 86% ✅ | ≥80% |
 | MED-std 標準(board) | 11 | 64% ✅ | ≥60% |
 | MED-hard 専門 | 6 | 50% ✅ | ≥40% |
+
+## 🇯🇵 日本ネットミーム 詳細 (参考値・未較正)
+
+**総合正答率: 45.8%（24問） / 拒否率: 20.8%**
+> 拒否率は「知らない」ではなく「答えなかった」割合。正答率だけを知識量として読まないこと。5択MCQのチャンス正答率は約20%。
+
+| 種別 | 問題数 | 正答率 | 拒否率 | 参考gate |
+|---|---|---|---|---|
+| CUL-knowledge 知識QA | 12 | 58% ⚠️ | 8% | ≥60% |
+| CUL-completion 補完/認識 | 6 | 50% ✅ | 17% | ≥50% |
+| CUL-generation 生成 | 6 | 17% ⚠️ | 67% | ≥40% |
 ```
 
 読み方：
@@ -971,11 +993,14 @@ llmbench certify --merge results/<stamp1>_<model>_results.json \
 | **ドメイン別テーブル** | `llmbench/certify.py` の `DEFAULT_DOMAIN_GATES`（既定値）、または `config.yaml` の `certify_domains:`（`--config` 指定時に上書き）のしきい値に対する合否。coding tierの合否とは独立に判定される。experimental/reference (writing/medical) はドメイン名に `*(experimental)*` タグが付く |
 | **バランス指数** | 測定済みドメイン（coding含む・writing/medicalは既定除外）の平均combinedの調和平均。1ドメインだけ極端に弱いモデルは算術平均より大きく下がる — 「一芸特化」を見抜く指標 |
 | **医療正答率内訳** | 全体 + 難易度別(med_basic/med_std/med_hard)。チャンス正答率(5択≈20%)との比較で「本当に知識があるか」を判断する材料にする。**参考値**であり臨床適用の根拠にはしない |
+| **ネットミーム内訳** | 全体 + 種別別(cul_knowledge/cul_completion/cul_generation) の正答率と**拒否率**。拒否率が高いモデルの低い正答率は「知らない」ではなく「答えない」ことを意味するので、必ず両方を並べて読む。**参考値**（学習コーパスの偏り × アライメント設定の指標であって能力の指標ではない） |
 
 `report.md` にも「🌐 ドメイン別」節(Resolved / 平均成功率 / 平均combined のみ)が追加されます。
-**ゲート判定・バランス指数・医療の難易度別内訳は `certify` の出力にのみ現れます。**
+`report.md` のドメイン別節には**拒否タスク数**の列も出ます。
+**ゲート判定・バランス指数・医療の難易度別内訳・ネットミームの拒否率内訳は `certify` の出力にのみ現れます。**
 （`llmbench run --with-sec ...` 等の実行後、`--output` 先の `*_report.md` を確認してください）。
 
-> writing/medical のゲート閾値は暫定（未較正）です。ドメイン別ゲートは `llmbench/certify.py` の
+> writing/medical/culture のゲート閾値は暫定（未較正）です。ドメイン別ゲートは `llmbench/certify.py` の
 > `DEFAULT_DOMAIN_GATES` が既定値で、`config.yaml` の `certify_domains:` で上書きできます
-> (`llmbench certify --config config.yaml` を指定した場合)。医療の難易度別gateは `DEFAULT_MED_GATES` で調整可能。
+> (`llmbench certify --config config.yaml` を指定した場合)。医療の難易度別gateは `DEFAULT_MED_GATES`、
+> ネットミームの種別別gateは `DEFAULT_CUL_GATES`（config は `certify_culture:`）で調整可能。
