@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 
 from . import GradeCtx, Grader, GraderEval
+from . import refusal as _refusal
 from .checks import extract_answer, run_checks
 
 _SYSTEM = """\
@@ -72,6 +73,7 @@ class ConstraintGrader(Grader):
             ev.fail_reason = f"{passed}/{total} checks passed" + (
                 f"; failed {failed}" if failed else ""
             )
+        _refusal.apply(ev, answer, raw_output)
         return ev
 
     def mock_gold(self, task) -> str:

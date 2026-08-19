@@ -1,3 +1,58 @@
+# 🇯🇵 日本ネットミーム ベンチ (culture ドメイン) + 拒否(refusal)検出 (2026-08-19)
+
+日本語圏でしか通用しないネットミーム／ネットスラング (淫夢語録・なんJ・2ch・空耳ネタ) を
+**知っているか**と**使えるか**に分けて測る 24 問を追加した。既存の日本語 LLM ベンチ
+(Nejumi, JamC-QA 等) がカバーしていない帯域で、「日本語 Web データをどれだけ食っているか」と
+「セーフティがどこで発火するか」を同時に炙り出す。
+
+**専用 grader は作らない。** 既存の `qa` / `constraint` / `judge` を流用し、台帳側で
+`domain: "culture"` を明示する方式にした (新しい採点ロジックを増やさずに済む)。
+
+| 層 | difficulty | grader | 問数 | 例 |
+|---|---|---|---|---|
+| A. 知識QA | `cul_knowledge` | `qa` | 12 (MCQ6/短答6) | 114514の語呂、野獣先輩とは、〜ンゴの由来、香具師、オンドゥル語 |
+| B. 補完・認識 | `cul_completion` | `constraint` | 6 (全て機械検証) | 「いいよ！____！」穴埋め、810が指す語、淫夢由来の語だけJSON配列で抽出 |
+| C. 生成 | `cul_generation` | `judge` | 6 | 語録の口調で「今日は暑い」、なんJ風実況、2ch風スレッド |
+
+## 拒否 (refusal) を不正解と分けて数える
+
+「知らないから答えられない」と「知っているが答えない」は別の失敗である。両方を一律に
+不正解として数えると、セーフティが発火しやすい題材では**知識量の比較がそのまま
+「どれだけ拒否しないか」の比較にすり替わる**。
+
+そこで `llmbench/graders/refusal.py` を新設し、qa / constraint / judge の3graderから呼ぶ。
+
+- 判定は **`resolved=False` のときだけ** — 正解中の「なお不適切な文脈で使われることも
+  あります」を拒否と誤検出しない
+- **`resolved` / `success_rate` / `combined` は一切変えない**（拒否も「解けなかった」の一種）
+- 「分かりません」は拒否と区別し `components["refusal"]["unknown"]` にのみ記録
+- results.json に `n_refused` / `refused`、summary に `n_refused_tasks` / `n_refused_attempts`
+- `certify` は種別別に **正答率と拒否率を併記**、`report.md` のドメイン別節にも拒否列を追加
+
+culture 以外のドメインでも同じ機構が働く（拒否が起きなければ全て 0 のまま）。旧 results.json は
+`n_refused` を持たないため拒否率 0% として扱う。
+
+| 追加/変更 | 内容 |
+|---|---|
+| 🧩 タスク | `tasks/tasks_culture.jsonl` + `tasks/c01_*`–`c24_*` (日英2種の issue、gold/checks/rubric) |
+| 🚫 `llmbench/graders/refusal.py` | 定型拒否句(日英)の検出。`GraderEval.refused` を立てる |
+| 🚩 CLI | `--with-culture` / `--only-culture` (`--with-l6/l7` と同体系) |
+| 🎓 `certify` | `certify_culture()` / `render_culture_md()`。種別別の正答率＋拒否率。既定でバランス指数からは除外 (reference) |
+| ⚙️ config | `certify_domains.culture` / `certify_culture:` (種別別の参考gate) |
+| 📊 report | ドメイン別節に 🇯🇵 culture 行と「拒否」列 |
+| ✅ テスト | `tests/test_culture.py` 49件 (台帳↔ディレクトリ整合 / 拒否検出の真陽性・偽陽性 / certify集計) |
+
+**検証**: `llmbench validate --only-culture` が PASS (gold 24/24 resolved・broken 24/24 failed)。
+既存4ドメイン (`--only-sec|gen|write|med`) も全て PASS でリグレッション無し。ユニットテスト 176 passed。
+
+> 注: ゲート閾値は暫定(未較正)。culture は**能力ではなく「学習コーパスの偏り × アライメント設定」の
+> 指標**なので `reference: true` としてバランス指数から除外している。正答率は必ず拒否率と
+> セットで読むこと。ミームは陳腐化するため定期的な棚卸しが必要 (回転の速いVTuber用語などは
+> 意図的に除外している)。
+
+---
+
+
 # 🔧 ハードウェア比較レポートの実運用フィードバック反映 (2026-07-31)
 
 実機7本 (RTX 5090 / RTX 3090 / Radeon 8060S × CUDA / Vulkan / ROCm) で

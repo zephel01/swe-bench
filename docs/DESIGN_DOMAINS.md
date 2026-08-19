@@ -186,6 +186,33 @@ class Grader:
   連結した回答を返す → 成功。`mock_broken` は mcq なら選択肢に無い `Z`、keyword なら
   `zzzzz`（キーワードを一切含まない）を返す → 失敗。
 
+### 3.6 culture（日本ネットミーム知識・参考値）
+
+**測るもの**: 日本語圏でしか通用しないネットミーム／ネットスラング (淫夢語録・なんJ・2ch・
+空耳ネタ等) の知識と運用力。**能力ではなく「学習コーパスの偏り × アライメント設定」の指標**
+なので reference 扱いで、既定ではバランス指数から除外する。
+
+**専用 grader は作らない**。既存の3つを使い回し、台帳側で `domain: "culture"` を明示する。
+
+| difficulty | grader | 測るもの |
+|---|---|---|
+| `cul_knowledge` | `qa` | A. 用語の意味・由来 (MCQ / 短答キーワード) |
+| `cul_completion` | `constraint` | B. 定型の補完・由来による分類 (全て機械検証) |
+| `cul_generation` | `judge` | C. 文脈に馴染ませて使えるか (rubric + hard制約) |
+
+**拒否 (refusal) の別カウント** — このドメイン固有の要件:
+
+出典にアダルト作品由来の語を含むため、セーフティの強いモデルは「知らない」のではなく
+「答えない」。両者を一律に不正解として数えると、知識量の比較が「どれだけ拒否しないか」の
+比較にすり替わる。そこで `llmbench/graders/refusal.py` を追加し、qa / constraint / judge の
+3 grader から呼ぶ。
+
+- `GraderEval.refused` / `Attempt.refused` / `TaskResult.{refused, n_refused}` を追加
+- **`resolved` / `success_rate` は一切変えない**（拒否も「解けなかった」の一種）
+- 判定は**不正解のときだけ**走る（正解中の注意書きを拒否と誤検出しないため）
+- 「分かりません」は拒否と区別し、`components["refusal"]["unknown"]` にだけ残す
+- summary に `n_refused_tasks` / `n_refused_attempts`、certify は種別別に正答率と拒否率を併記
+
 ## 4. タスク・ディレクトリ規約
 
 ```
@@ -201,13 +228,16 @@ tasks/
     issue.md / issue_ja.md
     rubric.json
     gold_answer.md
+  c01_114514/               # culture (grader は qa / constraint / judge を流用)
+    issue.md / issue_ja.md
+    gold.json                #   qa を使う場合。constraint なら checks.json + gold_answer.md
 ```
 
 コード系のような `buggy_code/` `gold/` `tests/` は不要。`tasks.py` は `buggy_code/` 欠落を許容する。
 
 ## 5. 台帳と CLI
 
-新規台帳（既定では読まれない）: `tasks_sec.jsonl` / `tasks_gen.jsonl` / `tasks_write.jsonl` / `tasks_med.jsonl`。
+新規台帳（既定では読まれない）: `tasks_sec.jsonl` / `tasks_gen.jsonl` / `tasks_write.jsonl` / `tasks_med.jsonl` / `tasks_culture.jsonl`。
 レコードに `grader` と `domain` と `difficulty` を持たせる:
 
 ```json
@@ -215,14 +245,17 @@ tasks/
 {"task_id":"g01","dir":"g01_json_status","grader":"constraint","domain":"general","difficulty":"gen_easy","title":"..."}
 {"task_id":"w01","dir":"w01_release_note","grader":"judge","domain":"writing","difficulty":"write_basic","title":"..."}
 {"task_id":"m01","dir":"m01_pharm_mcq","grader":"qa","domain":"medical","difficulty":"med_std","title":"..."}
+{"task_id":"c01","dir":"c01_114514","grader":"qa","domain":"culture","difficulty":"cul_knowledge","title":"...","category":"inmu"}
 ```
+
+`category` (`inmu` / `nanj` / `2ch` / `other` / `mixed`) は人間向けの分類で、ローダは無視する。
 
 CLI フラグ（`--with-l6/l7` と同じ体系）:
 
 | フラグ | 意味 |
 |---|---|
-| `--with-sec` / `--with-gen` / `--with-write` / `--with-med` | 既定40問に各ドメイン台帳を上乗せ |
-| `--only-sec` / `--only-gen` / `--only-write` / `--only-med` | 既定を除外し当該ドメインのみ実行（分割運用） |
+| `--with-sec` / `--with-gen` / `--with-write` / `--with-med` / `--with-culture` | 既定40問に各ドメイン台帳を上乗せ |
+| `--only-sec` / `--only-gen` / `--only-write` / `--only-med` / `--only-culture` | 既定を除外し当該ドメインのみ実行（分割運用） |
 
 `certify --merge` で分割実行結果を統合できる（既存機構をそのまま利用）。
 

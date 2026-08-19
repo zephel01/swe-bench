@@ -60,6 +60,10 @@ class Attempt:
     # fail-fast で実行されなかった試行。errored と同様に分母から外すが、
     # 「通信が落ちた」のではなく「回すだけ無駄と判断して省いた」なので区別する。
     skipped: bool = False
+    # セーフティ由来の拒否。resolved=False の内訳であって分母からは外さない
+    # (「答えられたのに答えなかった」もモデルの振る舞いなので失敗は失敗)。
+    # 「知識が無い」との切り分けのためだけに別カウントする。
+    refused: bool = False
 
 
 @dataclass
@@ -86,6 +90,8 @@ class TaskResult:
     pass_k: int = 1                    # pass_at_k の実際の k (既定は runs と同値)
     n_errored: int = 0                 # 通信/インフラ起因で採点できなかった試行数
     n_skipped: int = 0                 # fail-fast で実行しなかった試行数
+    n_refused: int = 0                 # セーフティ拒否と判定された試行数
+    refused: bool = False              # いずれかの試行が拒否だった
     attempts: list = field(default_factory=list)   # 各試行の要約 (軽量)
 
     # --- 打ち切り ---
@@ -460,6 +466,7 @@ class BenchmarkRunner:
             at.fail_reason = ev.fail_reason or at.fail_reason
             at.test_output = ev.detail_output
             at.quality_components = ev.components
+            at.refused = bool(getattr(ev, "refused", False))
 
         at.combined = combined_score(at.resolved, at.quality_score, self.scoring_cfg)
         return at
@@ -612,6 +619,11 @@ def _aggregate_attempts(
     toks = [a.completion_tokens for a in attempts if a.completion_tokens]
     tr.completion_tokens = round(sum(toks) / len(toks)) if toks else None
 
+    # 拒否: 採点対象の試行のうち何回が拒否だったか。
+    # success_rate の分母には影響しない (拒否も「解けなかった」の一種)。
+    tr.n_refused = sum(1 for a in scored if a.refused)
+    tr.refused = tr.n_refused > 0
+
     # 打ち切り: 1試行でも切られていれば「このタスクは上限に当たっている」
     tr.n_truncated = sum(1 for a in attempts if a.truncated)
     tr.truncated = tr.n_truncated > 0
@@ -655,6 +667,7 @@ def _aggregate_attempts(
             "finish_reason": a.finish_reason,
             "errored": a.errored,
             "skipped": a.skipped,
+            "refused": a.refused,
         }
         for a in attempts
     ]
@@ -804,6 +817,10 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
         # 「N回測った」と言えるのはこれが 0 のときだけなので summary に残す。
         "n_fail_fast_tasks": sum(1 for r in run.results if r.n_skipped),
         "n_skipped_attempts": sum(r.n_skipped for r in run.results),
+        # セーフティ拒否。0 でないランは「知らない」と「答えない」が
+        # 混ざっているので、正答率だけを知識量として読んではいけない。
+        "n_refused_tasks": sum(1 for r in run.results if r.refused),
+        "n_refused_attempts": sum(r.n_refused for r in run.results),
         "usability": {t: overall.get(t, 0) for t in usability.TIERS},
     }
     # 速度指標も summary に置く。従来はタスク単位 (results[]) にしか無く、

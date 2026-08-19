@@ -1,0 +1,13 @@
+[
+  {
+    "kind": "regex",
+    "pattern": "野獣",
+    "desc": "「野獣」を含む"
+  },
+  {
+    "kind": "char_count",
+    "min": 2,
+    "max": 12,
+    "desc": "単語のみ (2-12字)"
+  }
+]

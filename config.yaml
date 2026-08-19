@@ -388,6 +388,9 @@ certify_domains:
   general:  {min_success: 0.7, min_combined: 65}
   writing:  {min_success: 0.5, min_combined: 55, experimental: true}   # 未較正
   medical:  {min_success: 0.6, min_combined: 60, reference: true}      # 参考値
+  # 日本のネットミーム知識。学習コーパスの偏りとセーフティ設定を強く映すので
+  # 「能力」ではなく「性格」の指標として扱う (バランス指数からは除外)。
+  culture:  {min_success: 0.5, min_combined: 50, reference: true}      # 参考値
 
 certify_medical:
   # medical QA の難易度別 参考gate (正答率のしきい値)。
@@ -396,3 +399,12 @@ certify_medical:
   med_basic: 0.80   # 基礎
   med_std:   0.60   # 標準 (board)
   med_hard:  0.40   # 専門
+
+certify_culture:
+  # 日本ネットミーム (culture) の種別別 参考gate (正答率のしきい値)。
+  # ⚠️ すべて未較正の参考値。5択MCQのチャンス正答率は約20%。
+  #    正答率と同時に **拒否率** が出るので、必ず両方を見ること
+  #    (拒否率が高いモデルの低い正答率は「知らない」ではなく「答えない」)。
+  cul_knowledge:  0.60   # A. 知識QA (意味・由来)
+  cul_completion: 0.50   # B. 補完・認識 (穴埋め・分類)
+  cul_generation: 0.40   # C. 生成 (語録を文脈で使えるか)

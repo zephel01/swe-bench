@@ -245,13 +245,14 @@ def render_certificate_md(cert: dict, model: str = "") -> str:
 
 # ===== ドメイン別認証 (コーディング以外) =====
 
-DOMAIN_ORDER = ["security", "general", "writing", "medical"]
+DOMAIN_ORDER = ["security", "general", "writing", "medical", "culture"]
 
 DOMAIN_LABEL = {
     "security": "🛡️ security 検出/解析",
     "general": "📋 general 指示追従",
     "writing": "✍️ writing 創作",
     "medical": "🩺 medical QA",
+    "culture": "🇯🇵 culture ネットミーム",
 }
 
 # ドメイン別ゲート (暫定。experimental/reference はバランス指数から除外)。
@@ -260,6 +261,9 @@ DEFAULT_DOMAIN_GATES = {
     "general": {"min_success": 0.70, "min_combined": 65.0},
     "writing": {"min_success": 0.50, "min_combined": 55.0, "experimental": True},
     "medical": {"min_success": 0.60, "min_combined": 60.0, "reference": True},
+    # 日本のネットミーム知識。学習データの偏りとセーフティ設定を強く反映する
+    # 「性格診断」寄りの指標なので、既定でバランス指数から除外する (reference)。
+    "culture": {"min_success": 0.50, "min_combined": 50.0, "reference": True},
 }
 
 
@@ -350,7 +354,7 @@ def render_domains_md(cd: dict) -> str:
             f"**⚖️ バランス指数: {cd['balance_index']:.1f} / 100** "
             f"（{' + '.join(cd['balance_members'])} の調和平均。"
             f"一芸特化＝あるドメインだけ低いと大きく下がる）",
-            "> writing/medical は experimental/参考値のため、既定でバランス指数から除外。",
+            "> writing/medical/culture は experimental/参考値のため、既定でバランス指数から除外。",
         ]
     return "\n".join(lines)
 
@@ -411,6 +415,87 @@ def render_medical_md(cm: dict) -> str:
     return "\n".join(lines)
 
 
+# ===== 日本ネットミーム 詳細 (種別別 正答率 + 拒否率・参考値) =====
+
+CUL_TIER_ORDER = ["cul_knowledge", "cul_completion", "cul_generation"]
+CUL_TIER_LABEL = {
+    "cul_knowledge": "CUL-knowledge 知識QA",
+    "cul_completion": "CUL-completion 補完/認識",
+    "cul_generation": "CUL-generation 生成",
+}
+# 参考ゲート (未較正)。accuracy = 平均 success_rate。
+DEFAULT_CUL_GATES = {
+    "cul_knowledge": 0.60, "cul_completion": 0.50, "cul_generation": 0.40,
+}
+
+
+def _task_refused(t: dict) -> float:
+    """そのタスクの拒否率 (試行ベース)。古い results.json では 0.0."""
+    runs = int(t.get("runs", 1) or 1)
+    n_ref = int(t.get("n_refused", 0) or 0)
+    if n_ref:
+        return min(1.0, n_ref / max(1, runs))
+    return 1.0 if t.get("refused") else 0.0
+
+
+def certify_culture(results: list[dict], gates: dict | None = None) -> dict:
+    """culture ドメインを種別(knowledge/completion/generation)別に集計する.
+
+    正答率とは**別に拒否率を出す**のが要点。セーフティの強いモデルは
+    「知らない」のではなく「答えない」ので、正答率だけを知識量として
+    読むと誤読する。gates 省略時は DEFAULT_CUL_GATES (未較正の参考値)。
+    """
+    gates = gates or DEFAULT_CUL_GATES
+    buckets: dict[str, list] = {}
+    refusals: dict[str, list] = {}
+    for t in results:
+        if t.get("domain") != "culture":
+            continue
+        tier = t.get("difficulty", "cul_knowledge")
+        buckets.setdefault(tier, []).append(_task_success(t))
+        refusals.setdefault(tier, []).append(_task_refused(t))
+    rows, overall, overall_ref = [], [], []
+    for tier in CUL_TIER_ORDER:
+        if tier not in buckets:
+            continue
+        xs, rs = buckets[tier], refusals[tier]
+        overall += xs
+        overall_ref += rs
+        acc = _mean(xs)
+        gate = gates.get(tier, 0.0)
+        rows.append({"tier": tier, "n": len(xs), "accuracy": acc,
+                     "refusal_rate": _mean(rs), "gate": gate, "pass": acc >= gate})
+    return {
+        "tiers": rows, "n": len(overall),
+        "accuracy": _mean(overall) if overall else None,
+        "refusal_rate": _mean(overall_ref) if overall_ref else None,
+    }
+
+
+def render_culture_md(cc: dict) -> str:
+    if not cc["tiers"]:
+        return ""
+    lines = ["## 🇯🇵 日本ネットミーム 詳細 (参考値・未較正)", ""]
+    lines.append(
+        f"**総合正答率: {cc['accuracy'] * 100:.1f}%（{cc['n']}問） / "
+        f"拒否率: {cc['refusal_rate'] * 100:.1f}%**"
+    )
+    lines.append(
+        "> 拒否率は「知らない」ではなく「答えなかった」割合。正答率だけを"
+        "知識量として読まないこと。5択MCQのチャンス正答率は約20%。"
+    )
+    lines += ["", "| 種別 | 問題数 | 正答率 | 拒否率 | 参考gate |",
+              "|---|---|---|---|---|"]
+    for r in cc["tiers"]:
+        mark = "✅" if r["pass"] else "⚠️"
+        lines.append(
+            f"| {CUL_TIER_LABEL.get(r['tier'], r['tier'])} | {r['n']} | "
+            f"{r['accuracy'] * 100:.0f}% {mark} | {r['refusal_rate'] * 100:.0f}% | "
+            f"≥{r['gate'] * 100:.0f}% |"
+        )
+    return "\n".join(lines)
+
+
 def _load_results(path: Path) -> tuple[str, list[dict]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     return data.get("model", ""), data.get("results", [])
@@ -462,6 +547,9 @@ def main(argv: list[str]) -> int:
         med = render_medical_md(certify_medical(results))
         if med:
             print("\n" + med)
+        cul = render_culture_md(certify_culture(results))
+        if cul:
+            print("\n" + cul)
         print()
         return 0
 
@@ -474,6 +562,9 @@ def main(argv: list[str]) -> int:
         med = render_medical_md(certify_medical(results))
         if med:
             print("\n" + med)
+        cul = render_culture_md(certify_culture(results))
+        if cul:
+            print("\n" + cul)
         print()
     return 0
 
