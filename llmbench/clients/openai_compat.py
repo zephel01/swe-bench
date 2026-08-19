@@ -402,6 +402,20 @@ class OpenAICompatClient(LLMClient):
         body_chars = 0                # 本文の文字数 (<think> の外)
         body_started = False          # 本文に空白以外が出たか
         next_body_check = _CONTENT_LOOP_MIN_CHARS
+        bad_chunks = 0                # JSON として読めず捨てた SSE 行
+
+        # ⚠️ SSE の文字コードを明示する (2026-08-19 実害あり)。
+        # llama.cpp / vLLM は `Content-Type: text/event-stream` を charset 無しで
+        # 返す。requests は RFC 2616 に従い text/* の既定を ISO-8859-1 と解釈する
+        # ため、`iter_lines(decode_unicode=True)` が UTF-8 のバイト列を latin-1 で
+        # 復号してしまう。結果、日本語の応答は
+        #   1. 文字化けする (「野獣」→「éç£」。文字数も約3倍に膨らむ)
+        #   2. **黙って欠落する** — latin-1 復号後の文字列には U+0085 (NEL) 等が
+        #      現れ、str.splitlines() がそこを改行とみなして SSE 行を分断する。
+        #      分断された行は json.loads に失敗し、下の except で捨てられる。
+        # 実測: --lang ja のランで char_count が3倍になり、日本語キーワードの
+        # contains/regex が全滅、生成タスクが誤って不合格になっていた。
+        resp.encoding = "utf-8"
 
         def _add_think(text: str) -> None:
             """ガード用に「思考テキスト」を積む.
@@ -441,6 +455,11 @@ class OpenAICompatClient(LLMClient):
             try:
                 chunk = json.loads(body)
             except json.JSONDecodeError:
+                # 本来ここには来ない。来るならサーバが壊れた SSE を吐いたか、
+                # 文字コードの取り違えで行が分断されている (上の resp.encoding
+                # 参照)。黙って捨てるとモデル出力が欠けたまま採点されるので、
+                # 数えて最後に警告する。
+                bad_chunks += 1
                 continue
             if chunk.get("usage"):
                 usage = chunk["usage"] or {}
@@ -506,6 +525,13 @@ class OpenAICompatClient(LLMClient):
         # 持ち越し分 (タグ途中で終わった場合) を吐き出しておく。
         # 集計値の整合のためで、返す content/reasoning には影響しない。
         _add_think(splitter.flush()[0])
+        if bad_chunks:
+            # モデル出力が欠けたまま採点される事故を黙って通さない。
+            print(
+                f"⚠️  {self.name}: SSE を {bad_chunks} 行パースできず捨てました "
+                f"(応答が欠けている可能性があります)",
+                file=sys.stderr,
+            )
         return (
             "".join(content_parts), "".join(reasoning_parts),
             usage, finish_reason, abort,

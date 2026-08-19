@@ -41,11 +41,6 @@
     },
     {
       "kind": "regex",
-      "pattern": "[。．！？!?]",
-      "desc": "文として終端している"
-    },
-    {
-      "kind": "regex",
       "pattern": "(.)\\1{7,}",
       "negate": true,
       "desc": "同一文字の8連続が無い"
