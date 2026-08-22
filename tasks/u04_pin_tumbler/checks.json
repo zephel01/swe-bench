@@ -1,0 +1,9 @@
+[
+  {"kind": "regex", "pattern": "^\\s*-\\s+", "flags": "m", "desc": "箇条書き (- で始まる行がある)"},
+  {"kind": "line_count", "min": 3, "max": 6, "desc": "3-6行"},
+  {"kind": "regex", "pattern": "shear\\s*line|シア[ーア]?ライン|せん断線", "flags": "i", "desc": "shear line に言及 (日英)"},
+  {"kind": "regex", "pattern": "driver\\s*pin|ドライバ[ーア]?ピン|上ピン", "flags": "i", "desc": "driver pin に言及 (日英)"},
+  {"kind": "regex", "pattern": "key\\s*pin|キーピン|下ピン", "flags": "i", "desc": "key pin に言及 (日英)"},
+  {"kind": "not_contains", "text": "```", "desc": "コードフェンス無し"},
+  {"kind": "char_count", "min": 80, "max": 600, "desc": "80-600字"}
+]

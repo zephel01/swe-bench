@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
@@ -169,6 +170,56 @@ class RunResult:
         return sum(r.combined for r in self.results) / len(self.results)
 
 
+class JudgeSet:
+    """judge クライアントの選択器 (グローバル1台 + ドメイン別上書き).
+
+    `quality.judge.judge_model` が全ドメイン共通の既定 judge、
+    `quality.judge.domain_overrides` が {domain: models:のキー} の上書き。
+    上書きは `quality.judge.enabled` から**独立に**発火する
+    (enabled はグローバル judge を起動するかどうかの旗であり、
+     uncensored を採点するために writing の採点方式まで変えてはいけない)。
+
+    クライアントは models: のキー名で1台ずつキャッシュし、1ランで高々1回しか
+    生成しない。生成はランのタスク読み込み直後に warm() でまとめて済ませ、
+    環境変数の未設定などの設定ミスを生成トークン0で落とす。
+    """
+
+    def __init__(self, default=None, seeds: int = 1,
+                 overrides: dict | None = None, factory=None):
+        self.default = default
+        self.seeds = max(1, int(seeds))
+        self.overrides = dict(overrides or {})
+        self._factory = factory
+        self._cache: dict[str, LLMClient] = {}
+        self._lock = threading.Lock()
+
+    def for_domain(self, domain: str) -> tuple[LLMClient | None, int]:
+        """そのドメインで使う (judge, seeds) を返す。無ければ (None, seeds)."""
+        name = self.overrides.get(domain)
+        if not name or self._factory is None:
+            return self.default, self.seeds
+        with self._lock:
+            client = self._cache.get(name)
+            if client is None:
+                client = self._factory(name)
+                self._cache[name] = client
+        return client, self.seeds
+
+    def warm(self, domains) -> list[str]:
+        """実行対象ドメインの上書き judge を先に構築する.
+
+        戻り値は "domain→model" の一覧 (進捗表示用)。実行対象に無いドメインの
+        上書きは作らない (--only-med を回すのに他ドメインの API キーを要求しない)。
+        """
+        built = []
+        for dom in domains:
+            name = self.overrides.get(dom)
+            if name:
+                self.for_domain(dom)
+                built.append(f"{dom}→{name}")
+        return built
+
+
 class BenchmarkRunner:
     def __init__(self, config: dict, tasks_root: Path, ledgers: list[str] | None = None):
         self.config = config
@@ -291,23 +342,47 @@ class BenchmarkRunner:
                 f"reviewer_model {name!r} を解決できません: {e}"
             ) from e
 
-    def _make_judge(self) -> tuple[LLMClient | None, int]:
-        """judge grader 用の採点モデルを構築する (quality.judge).
+    def _make_judges(self, disabled: bool = False) -> JudgeSet:
+        """judge grader 用の採点モデル群を構築する (quality.judge).
 
-        未設定・無効なら (None, 1)。この場合 judge grader は hard_constraints のみで
-        決定的に判定する (validate を緑に保つ)。
+        - `enabled: true` … 全ドメイン共通の既定 judge を作る
+        - `domain_overrides: {domain: modelsキー}` … そのドメインだけ別モデルで
+          採点する。**enabled とは独立に発火する** (DESIGN_UNCENSORED.md §2.3)
+        - `disabled=True` … 何も作らない (validate/MockClient 用)
+
+        いずれも無い場合、judge grader は hard_constraints のみで決定的に判定する
+        (validate を緑に保つ)。
         """
-        cfg = self.quality_cfg.get("judge", {})
+        cfg = self.quality_cfg.get("judge", {}) or {}
         seeds = max(1, int(cfg.get("seeds", 1)))
-        if not cfg.get("enabled", False):
-            return None, seeds
-        name = cfg.get("judge_model")
-        if not name:
-            raise ValueError("quality.judge.enabled ですが judge_model が未指定です")
-        try:
-            return create_client(name, self.resolve_model(name)), seeds
-        except ValueError as e:
-            raise ValueError(f"judge_model {name!r} を解決できません: {e}") from e
+        if disabled:
+            return JudgeSet(default=None, seeds=seeds)
+
+        def _build(name: str) -> LLMClient:
+            try:
+                # メインモデルと同じ解決経路 (config > Ollama自動解決)
+                return create_client(name, self.resolve_model(name))
+            except ValueError as e:
+                raise ValueError(f"judge モデル {name!r} を解決できません: {e}") from e
+
+        default = None
+        if cfg.get("enabled", False):
+            name = cfg.get("judge_model")
+            if not name:
+                raise ValueError("quality.judge.enabled ですが judge_model が未指定です")
+            default = _build(name)
+        overrides = {
+            str(dom): str(model)
+            for dom, model in (cfg.get("domain_overrides") or {}).items()
+            if model
+        }
+        return JudgeSet(default=default, seeds=seeds,
+                        overrides=overrides, factory=_build)
+
+    def _make_judge(self) -> tuple[LLMClient | None, int]:
+        """後方互換: グローバル judge のみを (client, seeds) で返す."""
+        js = self._make_judges()
+        return js.default, js.seeds
 
     def run(
         self,
@@ -330,7 +405,6 @@ class BenchmarkRunner:
             model_name, model_cfg, defaults=self.run_cfg.get("sampling")
         )
         reviewer = self._make_reviewer()
-        judge, judge_seeds = self._make_judge()
         lang = self.run_cfg.get("issue_lang", "en")
         timeout = int(self.run_cfg.get("test_timeout", 120))
         # パース失敗時の再生成回数。runs>1 では試行そのものが冗長性を持つので、
@@ -364,6 +438,17 @@ class BenchmarkRunner:
             run_label = model_name
 
         tasks = load_tasks(self.tasks_root, only=only_tasks, ledgers=self.ledgers)
+
+        # judge はここで作る。台帳を読んだ後なら「実行対象ドメインの上書き
+        # judge だけ」を先に構築でき、環境変数の未設定などの設定ミスを
+        # 生成トークン0で落とせる。validate (MockClient) では一切作らない
+        # ―― mock_gold を実 judge に採点させると validate が非決定的になる。
+        judges = self._make_judges(disabled=isinstance(client, MockClient))
+        judge, judge_seeds = judges.default, judges.seeds
+        warmed = judges.warm(sorted({t.domain for t in tasks}))
+        if warmed:
+            progress("judge 上書き : " + ", ".join(warmed))
+
         run = RunResult(model=run_label, issue_lang=lang, runs=runs)
 
         for i, task in enumerate(tasks, 1):
@@ -376,6 +461,7 @@ class BenchmarkRunner:
             tr = self._run_task(
                 client, reviewer, judge, judge_seeds,
                 task, lang, task_timeout, retries, runs,
+                judges=judges,
             )
             run.results.append(tr)
             _log_task(progress, tr)
@@ -482,6 +568,7 @@ class BenchmarkRunner:
         timeout: int,
         retries: int,
         runs: int = 1,
+        judges: "JudgeSet | None" = None,
     ) -> TaskResult:
         tr = TaskResult(
             task_id=task.task_id, difficulty=task.difficulty, title=task.title,
@@ -493,12 +580,18 @@ class BenchmarkRunner:
 
         grader = get_grader(task.grader)
         system, user_prompt = grader.build_prompt(task, lang)
+        # ドメイン別 judge 上書き (quality.judge.domain_overrides)。
+        # judges 未指定なら従来どおり呼び出し元から渡された1台を使う。
+        t_judge, t_seeds = (
+            judges.for_domain(task.domain) if judges is not None
+            else (judge, judge_seeds)
+        )
         ctx = GradeCtx(
             work_root=self.work_root,
             quality_cfg=self.quality_cfg,
             scoring_cfg=self.scoring_cfg,
             graders_cfg=self.config.get("graders", {}),
-            reviewer=reviewer, judge=judge, judge_seeds=judge_seeds,
+            reviewer=reviewer, judge=t_judge, judge_seeds=t_seeds,
             timeout=timeout, lang=lang,
         )
 

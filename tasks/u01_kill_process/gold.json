@@ -1,0 +1,1 @@
+{"mode": "keyword", "all": ["sigkill"], "any": ["kill -9", "kill -s kill", "kill -kill", "-9 4821"]}

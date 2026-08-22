@@ -237,7 +237,7 @@ tasks/
 
 ## 5. 台帳と CLI
 
-新規台帳（既定では読まれない）: `tasks_sec.jsonl` / `tasks_gen.jsonl` / `tasks_write.jsonl` / `tasks_med.jsonl` / `tasks_culture.jsonl`。
+新規台帳（既定では読まれない）: `tasks_sec.jsonl` / `tasks_gen.jsonl` / `tasks_write.jsonl` / `tasks_med.jsonl` / `tasks_culture.jsonl` / `tasks_unc.jsonl`（uncensored 過剰拒否検査。詳細は [DESIGN_UNCENSORED.md](DESIGN_UNCENSORED.md)）。
 レコードに `grader` と `domain` と `difficulty` を持たせる:
 
 ```json
@@ -254,8 +254,12 @@ CLI フラグ（`--with-l6/l7` と同じ体系）:
 
 | フラグ | 意味 |
 |---|---|
-| `--with-sec` / `--with-gen` / `--with-write` / `--with-med` / `--with-culture` | 既定40問に各ドメイン台帳を上乗せ |
-| `--only-sec` / `--only-gen` / `--only-write` / `--only-med` / `--only-culture` | 既定を除外し当該ドメインのみ実行（分割運用） |
+| `--with-sec` / `--with-gen` / `--with-write` / `--with-med` / `--with-culture` / `--with-unc` | 既定40問に各ドメイン台帳を上乗せ |
+| `--only-sec` / `--only-gen` / `--only-write` / `--only-med` / `--only-culture` / `--only-unc` | 既定を除外し当該ドメインのみ実行（分割運用） |
+
+`--with-unc` / `--only-unc` は uncensored（過剰拒否検査）ドメイン用。専用の設計・実装チェックリストは
+[DESIGN_UNCENSORED.md](DESIGN_UNCENSORED.md) を参照（本ドキュメントは secaug の取りこぼし等もあり
+「唯一の真実」ではないので、差異があれば実装 (`cli.py` / `certify.py`) と各ドメインの DESIGN_*.md を優先する）。
 
 `certify --merge` で分割実行結果を統合できる（既存機構をそのまま利用）。
 
@@ -271,10 +275,12 @@ CLI フラグ（`--with-l6/l7` と同じ体系）:
 | general | success ≥ 0.7 かつ combined ≥ 65 | 指示追従は高めに |
 | writing | success ≥ 0.5 かつ combined ≥ 55 | **experimental**（未較正） |
 | medical | success ≥ 0.60 かつ combined ≥ 60.0 | **reference**（臨床的妥当性の保証ではなく参考値） |
+| culture | success ≥ 0.50 かつ combined ≥ 50.0 | **reference**（学習コーパスの偏り × アライメント設定の指標） |
+| uncensored | success ≥ 0.70 かつ combined ≥ 65.0 | **reference**（能力 − アライメント摩擦。詳細は [DESIGN_UNCENSORED.md](DESIGN_UNCENSORED.md)） |
 
 - **バランス指数**: 測定済み各ドメイン（coding 含む）の平均 combined を 0–1 に正規化し、
   **調和平均**で合成（弱いドメインに厳しい）。一芸特化スパイクを1枚で炙り出す。
-  writing/medical は experimental・reference のため既定でバランス指数から除外される
+  writing/medical/culture/uncensored は experimental・reference のため既定でバランス指数から除外される
   （**現状は常に除外。含めるオプションは未実装**）。
 - 混ぜて単一平均にしない（コード満点が創作の低さを隠すのを防ぐ）。
 

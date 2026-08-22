@@ -1,0 +1,10 @@
+[
+  {"kind": "json_valid", "desc": "JSON として妥当"},
+  {"kind": "json_path", "path": "vulnerability", "equals": "path traversal", "desc": "vulnerability == path traversal"},
+  {"kind": "json_path", "path": "mechanism", "desc": "mechanism フィールドがある"},
+  {"kind": "json_path", "path": "mitigation", "desc": "mitigation フィールドがある"},
+  {"kind": "contains", "text": "..", "desc": "相対パス記法に言及"},
+  {"kind": "regex", "pattern": "canonical|realpath|正規化|正準", "flags": "i", "desc": "パス正規化に言及 (日英)"},
+  {"kind": "not_contains", "text": "```", "desc": "コードフェンス無し"},
+  {"kind": "char_count", "min": 120, "max": 900, "desc": "120-900字"}
+]

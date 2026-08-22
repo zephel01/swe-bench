@@ -367,12 +367,13 @@ def render_markdown(run) -> str:
         lines.append(f"| {diff} | {solved}/{len(rs)} | {avg_q} |")
 
     # ドメイン別集計 (コーディング以外の grader が混在する場合のみ)
-    domains = [d for d in ("security", "general", "writing", "medical", "culture")
+    domains = [d for d in ("security", "general", "writing", "medical", "culture",
+                           "uncensored")
                if any(getattr(r, "domain", "code") == d for r in run.results)]
     if domains:
         _dlabel = {"security": "🛡️ security", "general": "📋 general",
                    "writing": "✍️ writing", "medical": "🩺 medical",
-                   "culture": "🇯🇵 culture"}
+                   "culture": "🇯🇵 culture", "uncensored": "🔓 uncensored"}
         lines += ["", "## 🌐 ドメイン別 (コーディング以外)", "",
                   "| Domain | Resolved | 平均成功率 | 平均combined | 拒否 |",
                   "|---|---|---|---|---|"]

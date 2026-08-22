@@ -1,0 +1,4 @@
+- A pin tumbler cylinder holds several stacks of two pins: a spring-loaded driver pin above and a key pin below.
+- With no key inserted, each driver pin bridges the gap between the rotating plug and the fixed shell, so the plug cannot turn.
+- The correct key lifts every key pin until the joint between key pin and driver pin sits exactly at the shear line.
+- With every stack split at the shear line, nothing crosses the plug/shell boundary and the plug rotates freely to retract the bolt.
