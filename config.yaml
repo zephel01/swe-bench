@@ -191,6 +191,37 @@ models:
     transient_retries: 5
     transient_backoff: 15
 
+  # ── OpenCode Go (OpenAI互換) ─────────────────────────────────────
+  # 複数プロバイダのモデルを単一のサブスクAPIキーで OpenAI互換エンドポイント
+  # として提供するゲートウェイ。取扱モデルは随時入れ替わるのでハードコード
+  # 一覧は持たない。実際に選べるIDは次のコマンドで確認すること:
+  #   llmbench models --remote opencode-go
+  # (実測 2026-08-22: 29モデル。glm-5/5.1/5.2/5.3, kimi-k2.5/k2.6/k2.7-code/k3,
+  #  deepseek-v4-flash(-vision-exp)/pro, minimax-m2.5/m2.7/m3, mimo-v2-omni/
+  #  v2-pro/v2.5/v2.5-pro, qwen3.5-plus/3.6-plus/3.7-max/3.7-plus/3.8-max,
+  #  grok-4.5, gpt-5.6-luna, hy3/hy3-preview, muse-spark-1.2-contributor,
+  #  ox-alpha-free 等)。model: の値を上記コマンドの出力IDに差し替えるだけで
+  #  他モデルに切替可能。
+  # ⚠️ 未検証: 一部モデル(MiniMax系など)は Anthropic Messages形式
+  #    (/v1/messages) 経由になる場合があるとの情報がある。その場合は
+  #    type: openai (Chat Completions) では叩けないため、401/404等で
+  #    弾かれたら個別に要調査 (type: cli の custom preset 等で別経路を検討)。
+  # ⚠️ サブスクのレート枠 (5時間ウィンドウ等) を消費する。高消費モデル
+  #    (kimi-k3 / grok-4.5 / qwen3.8-max 等) は枠を早く使い切る点に注意
+  #    (claude-sub 等と同様、大規模実行は分割推奨)。
+  opencode-go:
+    type: openai
+    base_url: "https://opencode.ai/zen/go/v1"
+    model: "glm-5.3"
+    api_key: "${OPENCODE_GO_API_KEY}"
+    temperature: 0.2
+    max_tokens: 24576
+    timeout: 600
+    # コーディングプラン系ゲートウェイは混雑時 429 を返すことがある想定で
+    # glm-coding と同じ粘り強さ (15→30→60→120→240s) にしておく。
+    transient_retries: 5
+    transient_backoff: 15
+
   # ── サブスクCLI (type: cli) — 定額チャットプラン枠でヘッドレス実行 ──
   # Claude Pro/Max・ChatGPT(Codex)・SuperGrok はOpenAI互換APIを公式提供しないが、
   # 各社の公式CLIはサブスク認証のまま非対話実行できる。それを subprocess で叩く。

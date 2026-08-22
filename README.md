@@ -52,6 +52,10 @@ llmbench validate --only-sec        # ドメインだけの自己検証もでき
 
 # 3️⃣ 利用可能モデルを確認（config定義 + Ollama稼働モデル）
 llmbench models
+llmbench models --remote opencode-go              # type:openai の /v1/models を照会し、
+                                                    # そのエンドポイントが実際に選べるモデルIDを一覧表示
+                                                    # (OpenCode Go 等、モデルを都度差し替えられる
+                                                    #  ゲートウェイの調査用。他の type:openai モデルにも使える)
 
 # 4️⃣ 実行 (コーディング)
 llmbench run --model local-openai                 # 既定40タスク・1回

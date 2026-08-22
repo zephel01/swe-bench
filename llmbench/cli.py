@@ -3,6 +3,8 @@
 使用例:
     llmbench list-tasks
     llmbench models                                  # config定義 + Ollama稼働モデル
+    llmbench models --remote opencode-go             # type:openai の /v1/models を照会
+                                                       # (OpenCode Go 等が実際に提供するモデルID一覧)
     llmbench run --model local-ollama
     llmbench run --model local-openai --tasks t001,t003 --lang ja
     llmbench preflight --model local-openai          # 走らせる前に設定を照合
@@ -21,7 +23,9 @@ from pathlib import Path
 
 import yaml
 
+from .clients.base import expand_env
 from .clients.ollama import list_ollama_models
+from .clients.openai_compat import list_remote_models
 from .runner import BenchmarkRunner, save_run
 from .tasks import load_tasks
 
@@ -140,7 +144,13 @@ def cmd_list_tasks(args) -> int:
 
 
 def cmd_models(args) -> int:
-    """利用可能なモデルを一覧する (config定義 + Ollama稼働モデル)."""
+    """利用可能なモデルを一覧する.
+
+    既定: config定義 + Ollama稼働モデル。
+    --remote <名前> を付けると、config.yaml の models.<名前> (type: openai)
+    が実際に接続先で提供しているモデルIDを /v1/models から取得して表示する
+    (例: OpenCode Go のようにモデルを都度差し替えられるゲートウェイの調査用)。
+    """
     config = _load_config(args.config)
     models = config.get("models", {})
     print("=== config.yaml 定義モデル ===")
@@ -160,14 +170,60 @@ def cmd_models(args) -> int:
     except Exception as e:
         print(f"  ⚠️ Ollamaに接続できません: {e}")
         print("  (Ollamaを起動すると、ここのモデルを --model で直接指定できます)")
-        return 0
-    if names:
-        for n in names:
-            print(f"  {n}")
-        print("  → config未定義でも `--model <名前>` でそのまま実行できます")
     else:
-        print("  (インストール済みモデルなし。`ollama pull <model>` で追加)")
+        if names:
+            for n in names:
+                print(f"  {n}")
+            print("  → config未定義でも `--model <名前>` でそのまま実行できます")
+        else:
+            print("  (インストール済みモデルなし。`ollama pull <model>` で追加)")
+
+    if getattr(args, "remote", None):
+        _print_remote_models(args.remote, models)
     return 0
+
+
+def _print_remote_models(name: str, models: dict) -> None:
+    """`llmbench models --remote <name>` の中身. /v1/models を照会して表示する."""
+    entry = models.get(name)
+    print(f"\n=== {name} が提供するモデル (/v1/models) ===")
+    if entry is None:
+        print(f"  ⚠️ config.yaml に models.{name} がありません")
+        return
+    if entry.get("type") != "openai":
+        print(
+            f"  ⚠️ models.{name} は type={entry.get('type')!r} です。"
+            " --remote は type: openai (OpenAI互換 /v1/models を持つエンドポイント)"
+            " のみ対応しています"
+        )
+        return
+    try:
+        base_url = expand_env(entry.get("base_url", ""), where=f"models.{name}.base_url")
+        api_key = expand_env(entry.get("api_key", ""), where=f"models.{name}.api_key")
+    except ValueError as e:
+        print(f"  ⚠️ {e}")
+        return
+    if not base_url:
+        print(f"  ⚠️ models.{name} に base_url がありません")
+        return
+    try:
+        items = list_remote_models(base_url, api_key)
+    except Exception as e:
+        print(f"  ⚠️ {base_url}/models を取得できません: {e}")
+        return
+    if not items:
+        print("  (0件。エンドポイントが空リストを返しました)")
+        return
+    for it in sorted(items, key=lambda x: (x.get("id") or x.get("model") or "")):
+        model_id = it.get("id") or it.get("model") or "?"
+        owner = it.get("owned_by")
+        extra = f"  (owned_by={owner})" if owner else ""
+        print(f"  {model_id}{extra}")
+    current = entry.get("model")
+    print(
+        f"  → 現在の config.yaml: model: \"{current}\" "
+        "(上の一覧のIDに書き換えて切替可能)"
+    )
 
 
 def _preflight_gate(args, config: dict) -> int | None:
@@ -376,6 +432,12 @@ def main() -> None:
     _common_args(p_models)
     p_models.add_argument("--ollama-host", default=None, dest="ollama_host",
                           help="Ollama接続先 (既定: configまたはhttp://localhost:11434)")
+    p_models.add_argument(
+        "--remote", default=None,
+        help="config.yaml の models.<名前> (type: openai) が実際に提供する"
+             "モデルIDを /v1/models から取得して表示する"
+             " (例: --remote opencode-go でOpenCode Goの選択肢を調査)",
+    )
     p_models.set_defaults(fn=cmd_models)
 
     p_run = sub.add_parser("run", help="ベンチマーク実行")

@@ -267,6 +267,27 @@ def fetch_served_model(base_url: str, api_key: str | None = None,
     return names[0]
 
 
+def list_remote_models(base_url: str, api_key: str | None = None,
+                       timeout: float = 10.0) -> list[dict]:
+    """/v1/models が提供する全モデルの生データを返す (id / owned_by 等).
+
+    fetch_served_model は「ローカルサーバが今ロードしている1つ」を選び取る
+    用途 (model: auto の自動解決) だが、こちらは OpenCode Go のように
+    1つのエンドポイントで複数モデルを選べるゲートウェイに向けて、
+    **一覧そのもの** を返す (`llmbench models --remote <名前>` から使う)。
+    空リストは「モデル0件」として正常に返す (エラーにしない) — 取得の可否と
+    件数0は別の状態なので、呼び出し側でメッセージを分けられるようにする。
+    接続できない/認証エラー等は requests の例外をそのまま送出する
+    (呼び出し側で握る)。
+    """
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    resp = requests.get(
+        base_url.rstrip("/") + "/models", headers=headers, timeout=timeout
+    )
+    resp.raise_for_status()
+    return resp.json().get("data") or []
+
+
 class OpenAICompatClient(LLMClient):
     def __init__(self, name: str, cfg: dict):
         super().__init__(name, cfg)
