@@ -1,0 +1,63 @@
+{
+  "findings": [
+    {
+      "id": "weak_password_hash",
+      "cwe": "CWE-916",
+      "any_of": [
+        "hashlib.md5",
+        "hash_password",
+        "md5"
+      ],
+      "keywords_all": [
+        [
+          "md5"
+        ]
+      ],
+      "location_any_of": [
+        "hash_password",
+        "hashlib.md5"
+      ]
+    },
+    {
+      "id": "ecb_mode",
+      "cwe": "CWE-327",
+      "any_of": [
+        "modes.ecb",
+        "aes",
+        "encrypt_token",
+        "cipher"
+      ],
+      "keywords_all": [
+        [
+          "ecb"
+        ]
+      ],
+      "location_any_of": [
+        "encrypt_token",
+        "decrypt_token",
+        "cipher",
+        "modes.ecb"
+      ]
+    },
+    {
+      "id": "hardcoded_key",
+      "cwe": "CWE-798",
+      "any_of": [
+        "token_key",
+        "0123456789abcdef",
+        "key"
+      ],
+      "keywords_all": [
+        [
+          "hardcod",
+          "hard-cod",
+          "ハードコー",
+          "埋め込",
+          "static key",
+          "固定",
+          "べた書き"
+        ]
+      ]
+    }
+  ]
+}

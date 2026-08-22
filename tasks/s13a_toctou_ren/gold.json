@@ -1,0 +1,72 @@
+{
+  "findings": [
+    {
+      "id": "toctou_symlink",
+      "cwe": "CWE-367",
+      "any_of": [
+        "os.stat",
+        "handle_entry",
+        "os.record_ref.exists",
+        "fetch_record",
+        "open(target"
+      ],
+      "keywords_all": [
+        [
+          "toctou",
+          "time-of-check",
+          "time of check",
+          "race condition",
+          "レースコンディション",
+          "競合",
+          "symlink",
+          "シンボリックリンク",
+          "チェック時"
+        ]
+      ],
+      "location_any_of": [
+        "handle_entry",
+        "os.stat",
+        "fetch_record",
+        "open(target"
+      ]
+    },
+    {
+      "id": "insecure_temp_file",
+      "cwe": "CWE-377",
+      "any_of": [
+        "tempfile.mktemp",
+        "mktemp",
+        "process_item"
+      ],
+      "keywords_all": [
+        [
+          "mktemp"
+        ]
+      ],
+      "location_any_of": [
+        "process_item",
+        "tempfile.mktemp",
+        "mktemp"
+      ]
+    }
+  ],
+  "allow_extra": [
+    {
+      "id": "unvalidated_name_secondary",
+      "any_of": [
+        "field_value",
+        "os.record_ref.join",
+        "root_dir",
+        "target"
+      ],
+      "keywords_all": [
+        [
+          "travers",
+          "トラバーサル",
+          "パス操作",
+          "record_ref injection"
+        ]
+      ]
+    }
+  ]
+}

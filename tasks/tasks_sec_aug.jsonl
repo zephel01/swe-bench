@@ -1,0 +1,34 @@
+{"task_id": "s01a", "dir": "s01a_pathtrav_ren", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Path traversal in file reader [語彙摂動]"}
+{"task_id": "s01b", "dir": "s01b_pathtrav_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Path traversal in file reader [囮追加]"}
+{"task_id": "s02a", "dir": "s02a_sqli_ren", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "SQL injection in user lookup [語彙摂動]"}
+{"task_id": "s02b", "dir": "s02b_sqli_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "SQL injection in user lookup [囮追加]"}
+{"task_id": "s03a", "dir": "s03a_bruteforce_ren", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "SSH brute-force in auth log [語彙摂動]"}
+{"task_id": "s03b", "dir": "s03b_bruteforce_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "SSH brute-force in auth log [囮追加]"}
+{"task_id": "s04a", "dir": "s04a_clean_ren", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Clean configuration loader (decoy) [語彙摂動]"}
+{"task_id": "s04b", "dir": "s04b_clean_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Clean configuration loader (decoy) [囮追加]"}
+{"task_id": "s05a", "dir": "s05a_cmdinj_ren", "grader": "detection", "domain": "security", "difficulty": "sec_easy", "title": "Command injection in backup endpoint [語彙摂動]"}
+{"task_id": "s05b", "dir": "s05b_cmdinj_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_easy", "title": "Command injection in backup endpoint [囮追加]"}
+{"task_id": "s06a", "dir": "s06a_deserial_ren", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Unsafe deserialization in session cookie [語彙摂動]"}
+{"task_id": "s06b", "dir": "s06b_deserial_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Unsafe deserialization in session cookie [囮追加]"}
+{"task_id": "s07a", "dir": "s07a_ssrf_ren", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "SSRF in link preview fetcher [語彙摂動]"}
+{"task_id": "s07b", "dir": "s07b_ssrf_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "SSRF in link preview fetcher [囮追加]"}
+{"task_id": "s08a", "dir": "s08a_idor_ren", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Missing ownership check in invoice API [語彙摂動]"}
+{"task_id": "s08b", "dir": "s08b_idor_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Missing ownership check in invoice API [囮追加]"}
+{"task_id": "s09a", "dir": "s09a_crypto_ren", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Cryptographic misuse in token vault (3 findings) [語彙摂動]"}
+{"task_id": "s09b", "dir": "s09b_crypto_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Cryptographic misuse in token vault (3 findings) [囮追加]"}
+{"task_id": "s10a", "dir": "s10a_clean_auth_ren", "grader": "detection", "domain": "security", "difficulty": "sec_easy", "title": "Hardened login and report helper (decoy) [語彙摂動]"}
+{"task_id": "s10b", "dir": "s10b_clean_auth_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_easy", "title": "Hardened login and report helper (decoy) [囮追加]"}
+{"task_id": "s11a", "dir": "s11a_weblog_ren", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "SQL injection exploitation in web access log [語彙摂動]"}
+{"task_id": "s11b", "dir": "s11b_weblog_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "SQL injection exploitation in web access log [囮追加]"}
+{"task_id": "s12a", "dir": "s12a_clean_weblog_ren", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Routine web access log (decoy) [語彙摂動]"}
+{"task_id": "s12b", "dir": "s12b_clean_weblog_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Routine web access log (decoy) [囮追加]"}
+{"task_id": "s13a", "dir": "s13a_toctou_ren", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "TOCTOU and temp file handling in report spooler (2 findings) [語彙摂動]"}
+{"task_id": "s13b", "dir": "s13b_toctou_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "TOCTOU and temp file handling in report spooler (2 findings) [囮追加]"}
+{"task_id": "s14a", "dir": "s14a_ssti_xss_ren", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Template injection and XSS in note service (4 findings) [語彙摂動]"}
+{"task_id": "s14b", "dir": "s14b_ssti_xss_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Template injection and XSS in note service (4 findings) [囮追加]"}
+{"task_id": "s15a", "dir": "s15a_clean_plugin_ren", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Plugin loader with allowlist and literal parsing (hard decoy) [語彙摂動]"}
+{"task_id": "s15b", "dir": "s15b_clean_plugin_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Plugin loader with allowlist and literal parsing (hard decoy) [囮追加]"}
+{"task_id": "s16a", "dir": "s16a_clean_crypto_ren", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Modern AEAD and KDF usage (hard decoy) [語彙摂動]"}
+{"task_id": "s16b", "dir": "s16b_clean_crypto_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Modern AEAD and KDF usage (hard decoy) [囮追加]"}
+{"task_id": "s17a", "dir": "s17a_clean_docsearch_ren", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Documentation search traffic containing SQL keywords (hard decoy) [語彙摂動]"}
+{"task_id": "s17b", "dir": "s17b_clean_docsearch_decoy", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Documentation search traffic containing SQL keywords (hard decoy) [囮追加]"}

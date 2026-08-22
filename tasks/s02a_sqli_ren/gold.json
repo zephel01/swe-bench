@@ -6,7 +6,7 @@
       "any_of": [
         "cursor.execute",
         "query",
-        "username",
+        "record_ref",
         "or '1'='1"
       ],
       "keywords_all": [
@@ -20,8 +20,8 @@
         "cursor.execute",
         "query",
         "lookup",
-        "find_user",
-        "username"
+        "handle_entry",
+        "record_ref"
       ]
     }
   ]

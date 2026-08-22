@@ -1,0 +1,88 @@
+{
+  "findings": [
+    {
+      "id": "sql_injection_exploited",
+      "cwe": "CWE-89",
+      "any_of": [
+        "198.51.100.23",
+        "union select",
+        "/api/items",
+        "information_schema",
+        "password_hash",
+        "id="
+      ],
+      "keywords_all": [
+        [
+          "sql"
+        ]
+      ],
+      "location_any_of": [
+        "198.51.100.23",
+        "/api/items",
+        "02:14",
+        "access log"
+      ]
+    }
+  ],
+  "allow_extra": [
+    {
+      "id": "automated_tooling_secondary",
+      "any_of": [
+        "python-requests",
+        "198.51.100.23",
+        "user-agent",
+        "user agent"
+      ],
+      "keywords_all": [
+        [
+          "automat",
+          "tooling",
+          "スキャナ",
+          "自動化",
+          "sqlmap",
+          "user-agent",
+          "user agent",
+          "ツール"
+        ]
+      ]
+    },
+    {
+      "id": "missing_controls_secondary",
+      "any_of": [
+        "/api/items",
+        "198.51.100.23",
+        "waf",
+        "rate limit"
+      ],
+      "keywords_all": [
+        [
+          "rate limit",
+          "レート制限",
+          "waf",
+          "ブロック",
+          "遮断",
+          "監視",
+          "検知の欠如",
+          "no blocking"
+        ]
+      ]
+    },
+    {
+      "id": "verbose_error_secondary",
+      "any_of": [
+        "500",
+        "217"
+      ],
+      "keywords_all": [
+        [
+          "error message",
+          "エラーメッセージ",
+          "verbose error",
+          "stack trace",
+          "スタックトレース",
+          "エラー応答"
+        ]
+      ]
+    }
+  ]
+}

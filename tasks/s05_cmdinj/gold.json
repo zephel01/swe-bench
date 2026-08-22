@@ -1,0 +1,74 @@
+{
+  "findings": [
+    {
+      "id": "command_injection",
+      "cwe": "CWE-78",
+      "any_of": [
+        "shell=true",
+        "subprocess",
+        "tar -czf",
+        "du -sh",
+        "project"
+      ],
+      "keywords_all": [
+        [
+          "inject",
+          "インジェク",
+          "command exec",
+          "コマンド実行",
+          "os command",
+          "arbitrary command",
+          "任意のコマンド",
+          "コマンドを実行"
+        ]
+      ],
+      "location_any_of": [
+        "create_archive",
+        "disk_usage",
+        "subprocess",
+        "backup"
+      ]
+    }
+  ],
+  "allow_extra": [
+    {
+      "id": "path_traversal_secondary",
+      "any_of": [
+        "project",
+        "tar -czf",
+        "archive_dir",
+        "../"
+      ],
+      "keywords_all": [
+        [
+          "travers",
+          "トラバーサル",
+          "path manipulation",
+          "パス操作",
+          "ディレクトリ",
+          "path injection"
+        ]
+      ]
+    },
+    {
+      "id": "missing_auth_secondary",
+      "any_of": [
+        "/backup",
+        "backup(",
+        "app.route",
+        "route"
+      ],
+      "keywords_all": [
+        [
+          "authentic",
+          "認証",
+          "unauthenticated",
+          "missing auth",
+          "access control",
+          "アクセス制御",
+          "no auth"
+        ]
+      ]
+    }
+  ]
+}

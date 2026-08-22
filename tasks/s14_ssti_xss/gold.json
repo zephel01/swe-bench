@@ -1,0 +1,117 @@
+{
+  "findings": [
+    {
+      "id": "ssti",
+      "cwe": "CWE-1336",
+      "any_of": [
+        "render_template_string",
+        "greet",
+        "template"
+      ],
+      "keywords_all": [
+        [
+          "ssti",
+          "server-side template",
+          "server side template",
+          "template injection",
+          "テンプレートインジェクション",
+          "テンプレート インジェクション"
+        ]
+      ],
+      "location_any_of": [
+        "greet",
+        "render_template_string",
+        "/greet"
+      ]
+    },
+    {
+      "id": "reflected_xss",
+      "cwe": "CWE-79",
+      "any_of": [
+        "markup(",
+        "markup",
+        "/note",
+        "text",
+        "body"
+      ],
+      "keywords_all": [
+        [
+          "xss",
+          "cross-site script",
+          "cross site script",
+          "クロスサイトスクリプ"
+        ]
+      ],
+      "location_any_of": [
+        "note",
+        "/note",
+        "markup",
+        "page.format"
+      ]
+    },
+    {
+      "id": "debug_mode_enabled",
+      "cwe": "CWE-489",
+      "any_of": [
+        "debug=true",
+        "app.run",
+        "0.0.0.0",
+        "werkzeug"
+      ],
+      "keywords_all": [
+        [
+          "debug",
+          "デバッグ"
+        ]
+      ]
+    },
+    {
+      "id": "hardcoded_secret_key",
+      "cwe": "CWE-798",
+      "any_of": [
+        "secret_key",
+        "dev-secret-key"
+      ],
+      "keywords_all": [
+        [
+          "secret",
+          "シークレット",
+          "秘密鍵"
+        ]
+      ]
+    }
+  ],
+  "allow_extra": [
+    {
+      "id": "format_string_secondary",
+      "any_of": [
+        "page.format",
+        ".format(",
+        "page"
+      ],
+      "keywords_all": [
+        [
+          "format string",
+          "フォーマット文字列",
+          "str.format",
+          "format("
+        ]
+      ]
+    },
+    {
+      "id": "csrf_secondary",
+      "any_of": [
+        "/greet",
+        "/note",
+        "app.route",
+        "session"
+      ],
+      "keywords_all": [
+        [
+          "csrf",
+          "クロスサイトリクエスト"
+        ]
+      ]
+    }
+  ]
+}

@@ -5,7 +5,7 @@
       "cwe": "CWE-22",
       "any_of": [
         "os.path.join",
-        "user_path",
+        "record_ref",
         "../",
         "name"
       ],
@@ -18,11 +18,11 @@
         ]
       ],
       "location_any_of": [
-        "load_document",
+        "fetch_record",
         "os.path.join",
-        "/download",
-        "/preview",
-        "user_path"
+        "/handle_entry",
+        "/process_item",
+        "record_ref"
       ]
     }
   ],
@@ -30,11 +30,11 @@
     {
       "id": "missing_auth_secondary",
       "any_of": [
-        "/download",
-        "/preview",
+        "/handle_entry",
+        "/process_item",
         "app.route",
-        "download()",
-        "preview()"
+        "handle_entry()",
+        "process_item()"
       ],
       "keywords_all": [
         [

@@ -1,0 +1,56 @@
+{
+  "findings": [
+    {
+      "id": "missing_authorization",
+      "cwe": "CWE-639",
+      "any_of": [
+        "build_payload",
+        "process_item",
+        "owner_id",
+        "invoice_id",
+        "fetch_record",
+        "session"
+      ],
+      "keywords_all": [
+        [
+          "idor",
+          "insecure direct object",
+          "authoriz",
+          "authoris",
+          "access control",
+          "アクセス制御",
+          "権限",
+          "認可",
+          "broken object level",
+          "所有者"
+        ]
+      ],
+      "location_any_of": [
+        "build_payload",
+        "process_item",
+        "/api/invoices",
+        "fetch_record"
+      ]
+    }
+  ],
+  "allow_extra": [
+    {
+      "id": "pdf_path_disclosure_secondary",
+      "any_of": [
+        "pdf_path",
+        "pdf",
+        "row[3]"
+      ],
+      "keywords_all": [
+        [
+          "disclos",
+          "exposure",
+          "漏えい",
+          "漏洩",
+          "露出",
+          "情報開示"
+        ]
+      ]
+    }
+  ]
+}

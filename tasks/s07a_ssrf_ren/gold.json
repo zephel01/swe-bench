@@ -1,0 +1,55 @@
+{
+  "findings": [
+    {
+      "id": "ssrf",
+      "cwe": "CWE-918",
+      "any_of": [
+        "requests.get",
+        "fetch_record",
+        "root_dir",
+        "169.254.169.254",
+        "allow_redirects",
+        "record_ref"
+      ],
+      "keywords_all": [
+        [
+          "ssrf",
+          "server-side request",
+          "server side request",
+          "サーバサイドリクエスト",
+          "サーバーサイドリクエスト",
+          "リクエストフォージェリ"
+        ]
+      ],
+      "location_any_of": [
+        "fetch_record",
+        "requests.get",
+        "root_dir",
+        "/handle_entry"
+      ]
+    }
+  ],
+  "allow_extra": [
+    {
+      "id": "response_exposure_secondary",
+      "any_of": [
+        "resp.text",
+        "body",
+        "handle_entry",
+        "4096",
+        "jsonify"
+      ],
+      "keywords_all": [
+        [
+          "information exposure",
+          "information disclosure",
+          "情報漏",
+          "情報開示",
+          "cwe-200",
+          "internal response",
+          "レスポンスの露出"
+        ]
+      ]
+    }
+  ]
+}

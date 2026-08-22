@@ -2,3 +2,16 @@
 {"task_id": "s02", "dir": "s02_sqli", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "SQL injection in user lookup"}
 {"task_id": "s03", "dir": "s03_bruteforce", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "SSH brute-force in auth log"}
 {"task_id": "s04", "dir": "s04_clean", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Clean configuration loader (decoy)"}
+{"task_id": "s05", "dir": "s05_cmdinj", "grader": "detection", "domain": "security", "difficulty": "sec_easy", "title": "Command injection in backup endpoint"}
+{"task_id": "s06", "dir": "s06_deserial", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Unsafe deserialization in session cookie"}
+{"task_id": "s07", "dir": "s07_ssrf", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "SSRF in link preview fetcher"}
+{"task_id": "s08", "dir": "s08_idor", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Missing ownership check in invoice API"}
+{"task_id": "s09", "dir": "s09_crypto", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Cryptographic misuse in token vault (3 findings)"}
+{"task_id": "s10", "dir": "s10_clean_auth", "grader": "detection", "domain": "security", "difficulty": "sec_easy", "title": "Hardened login and report helper (decoy)"}
+{"task_id": "s11", "dir": "s11_weblog", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "SQL injection exploitation in web access log"}
+{"task_id": "s12", "dir": "s12_clean_weblog", "grader": "detection", "domain": "security", "difficulty": "sec_medium", "title": "Routine web access log (decoy)"}
+{"task_id": "s13", "dir": "s13_toctou", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "TOCTOU and temp file handling in report spooler (2 findings)"}
+{"task_id": "s14", "dir": "s14_ssti_xss", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Template injection and XSS in note service (4 findings)"}
+{"task_id": "s15", "dir": "s15_clean_plugin", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Plugin loader with allowlist and literal parsing (hard decoy)"}
+{"task_id": "s16", "dir": "s16_clean_crypto", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Modern AEAD and KDF usage (hard decoy)"}
+{"task_id": "s17", "dir": "s17_clean_docsearch", "grader": "detection", "domain": "security", "difficulty": "sec_hard", "title": "Documentation search traffic containing SQL keywords (hard decoy)"}

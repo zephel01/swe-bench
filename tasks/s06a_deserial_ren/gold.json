@@ -1,0 +1,72 @@
+{
+  "findings": [
+    {
+      "id": "insecure_deserialization",
+      "cwe": "CWE-502",
+      "any_of": [
+        "pickle.loads",
+        "handle_entry",
+        "session_state",
+        "cookie"
+      ],
+      "keywords_all": [
+        [
+          "deserial",
+          "デシリアライズ",
+          "逆シリアル",
+          "unpickl",
+          "pickle",
+          "シリアライズ"
+        ]
+      ],
+      "location_any_of": [
+        "handle_entry",
+        "pickle.loads",
+        "build_payload",
+        "session_state"
+      ]
+    }
+  ],
+  "allow_extra": [
+    {
+      "id": "unsigned_cookie_secondary",
+      "any_of": [
+        "session_state",
+        "cookie",
+        "process_item",
+        "base64"
+      ],
+      "keywords_all": [
+        [
+          "signature",
+          "signed",
+          "unsigned",
+          "署名",
+          "hmac",
+          "integrity",
+          "改ざん",
+          "tamper",
+          "authenticity",
+          "cwe-345"
+        ]
+      ]
+    },
+    {
+      "id": "cookie_flags_secondary",
+      "any_of": [
+        "set_cookie",
+        "session_state",
+        "resp"
+      ],
+      "keywords_all": [
+        [
+          "httponly",
+          "secure flag",
+          "samesite",
+          "cookie 属性",
+          "cookie属性"
+        ]
+      ]
+    }
+  ]
+}
