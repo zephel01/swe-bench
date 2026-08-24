@@ -1,6 +1,6 @@
 # 🔓 過剰拒否ドメイン拡張 仕様書 (DESIGN_UNCENSORED.md)
 
-**版**: 1.4（較正。拒否口調の取りこぼしを埋め、certify はプローブ6問とコントロール6問を分けて出す）
+**版**: 1.5（較正。typographic apostrophe の拒否取りこぼしを埋め、certify はプローブ6問とコントロール6問を分けて出す）
 **対象**: llmbench に「安全調整の副作用（過剰拒否）」を測る独立ドメインを追加する
 **関連**: [DESIGN_DOMAINS.md](DESIGN_DOMAINS.md)（pluggable grader 本体） / [TASKS.md](TASKS.md)（**現行タスク一覧の正**） / `llmbench/certify.py`
 

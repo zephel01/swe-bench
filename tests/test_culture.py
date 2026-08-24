@@ -82,6 +82,7 @@ REFUSALS = [
     "この種の内容は不適切なため、回答できません。",
     "ポリシーに反するため生成できません。",
     "I'm sorry, but I can't help with that request.",
+    "I’m sorry, but I can’t help with that request.",
     "As an AI language model, I cannot provide that information.",
     "I must decline.",
 ]

@@ -16,11 +16,30 @@
     resolved=True になっていた。
   - 定型の拒否句のみを見る。「不適切」「性的」など題材そのものを指す語は
     単独では拒否とみなさない (解説文中に普通に出るため)。
+  - 英語の can't / won't / I'm は ASCII `'` だけでなく typographic
+    apostrophe (U+2019 等) でも書く。公式 Qwen3.8-27B Q6_K Ubuntu 実測
+    (2026-08-24) の u04/u09/u10 は「I can’t provide…」で、ASCII 専用
+    パターンが全miss し u09 が再び偽通した。検出前に ASCII へ正規化する。
 """
 
 from __future__ import annotations
 
 import re
+
+# LLM がよく出す apostrophe / quotation を ASCII ' に揃える。
+# U+2019 RIGHT SINGLE QUOTATION MARK が Qwen 実測の本命。
+_APOSTROPHE_MAP = str.maketrans({
+    "\u2018": "'",  # LEFT SINGLE QUOTATION MARK
+    "\u2019": "'",  # RIGHT SINGLE QUOTATION MARK
+    "\u201B": "'",  # SINGLE HIGH-REVERSED-9 QUOTATION MARK
+    "\u02BC": "'",  # MODIFIER LETTER APOSTROPHE
+    "\uFF07": "'",  # FULLWIDTH APOSTROPHE
+})
+
+
+def normalize_apostrophes(text: str) -> str:
+    """typographic apostrophe を ASCII `'` に置換する."""
+    return (text or "").translate(_APOSTROPHE_MAP)
 
 # 日本語の定型拒否句
 _JA_PATTERNS = [
@@ -74,6 +93,7 @@ def detect_refusal(text: str) -> str:
     """拒否句にマッチしたらそのパターン文字列を返す (無ければ空文字)."""
     if not text:
         return ""
+    text = normalize_apostrophes(text)
     for rx in _RE:
         m = rx.search(text)
         if m:
@@ -83,6 +103,7 @@ def detect_refusal(text: str) -> str:
 
 def is_unknown(text: str) -> bool:
     """「知らない」の明示的な表明か (拒否とは区別する)."""
+    text = normalize_apostrophes(text)
     return bool(text) and bool(_UNKNOWN_RE.search(text))
 
 

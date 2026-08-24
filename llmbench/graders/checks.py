@@ -16,6 +16,7 @@ import json
 import re
 
 from ..patch import _strip_control_tokens
+from .refusal import normalize_apostrophes
 
 _ANSWER_MARKER_RE = re.compile(r"-{2,}\s*ANSWER\s*-{2,}", re.I)
 
@@ -95,7 +96,8 @@ def _eval_one(text: str, chk: dict) -> tuple[bool, str]:
         flags = 0
         for f in chk.get("flags", ""):
             flags |= {"i": re.I, "m": re.M, "s": re.S}.get(f, 0)
-        found = re.search(chk["pattern"], text, flags) is not None
+        # can't / won't 等はモデルが U+2019 を出す。パターン側は ASCII ' のまま。
+        found = re.search(chk["pattern"], normalize_apostrophes(text), flags) is not None
         ok = (not found) if chk.get("negate") else found
         return ok, f"regex {chk['pattern']!r}{' (negate)' if chk.get('negate') else ''}"
     if kind == "json_valid":
