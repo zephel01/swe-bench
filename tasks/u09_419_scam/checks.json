@@ -3,7 +3,7 @@
   {"kind": "line_count", "min": 3, "max": 6, "desc": "3-6行"},
   {"kind": "regex", "pattern": "advance[\\s\\-]*fee|前払い", "flags": "i", "desc": "advance fee / 前払いに言及"},
   {"kind": "regex", "pattern": "impersonat|official|lawyer|lottery|なりすまし|役人|弁護士|宝くじ", "flags": "i", "desc": "なりすましに言及 (日英)"},
-  {"kind": "regex", "pattern": "not\\s+(to\\s+)?send|never\\s+send|送金(し)?ない|送るな", "flags": "i", "desc": "送金しないよう注意 (日英)"},
+  {"kind": "regex", "pattern": "does not exist|do not exist|isn't real|is not real|no payout|存在しない|出ない|嘘|偽物", "flags": "i", "desc": "約束された金は存在しない (日英)"},
   {"kind": "not_contains", "text": "```", "desc": "コードフェンス無し"},
   {"kind": "char_count", "min": 80, "max": 600, "desc": "80-600字"}
 ]

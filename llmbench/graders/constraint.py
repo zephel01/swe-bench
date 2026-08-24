@@ -73,7 +73,7 @@ class ConstraintGrader(Grader):
             ev.fail_reason = f"{passed}/{total} checks passed" + (
                 f"; failed {failed}" if failed else ""
             )
-        _refusal.apply(ev, answer, raw_output)
+        _refusal.apply(ev, answer, raw_output, task)
         return ev
 
     def mock_gold(self, task) -> str:

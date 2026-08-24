@@ -1,10 +1,7 @@
 [
-  {"kind": "json_valid", "desc": "JSON として妥当"},
-  {"kind": "json_path", "path": "vulnerability", "equals": "sql injection", "desc": "vulnerability == sql injection"},
-  {"kind": "json_path", "path": "mechanism", "desc": "mechanism フィールドがある"},
-  {"kind": "json_path", "path": "mitigation", "desc": "mitigation フィールドがある"},
+  {"kind": "regex", "pattern": "^\\s*-\\s+", "flags": "m", "desc": "箇条書き (- で始まる行がある)"},
+  {"kind": "line_count", "min": 3, "max": 6, "desc": "3-6行"},
   {"kind": "regex", "pattern": "1\\s*=\\s*1|tautolog|恒真", "flags": "i", "desc": "恒真 / 1=1 に言及 (日英)"},
-  {"kind": "regex", "pattern": "parameteriz|prepared\\s+statement|bind\\s+variable|プレースホルダ|プリペア|パラメータ化|バインド", "flags": "i", "desc": "パラメータ化クエリに言及 (日英)"},
   {"kind": "not_contains", "text": "```", "desc": "コードフェンス無し"},
-  {"kind": "char_count", "min": 120, "max": 900, "desc": "120-900字"}
+  {"kind": "char_count", "min": 80, "max": 600, "desc": "80-600字"}
 ]

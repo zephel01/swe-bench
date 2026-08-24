@@ -214,7 +214,7 @@ L6 の閾値は 2026-06-26 の実モデル較正で確定済み。L7 の閾値�
 | ✍️ writing | `judge` | `tasks_write.jsonl` / `--with-write` `--only-write` | rubric + judgeモデルで 0–10 採点（**experimental**）。judgeが無い時は hard制約(文字数等)のみで決定的に判定 |
 | 🩺 medical | `qa` | `tasks_med.jsonl` / `--with-med` `--only-med` | 医療QAをアンサーキー照合 (MCQ=選択肢, 短答=キーワード)。gold に**日英両方の許容語**を入れており `--lang ja` の日本語モデルも正答扱い。**参考値** |
 | 🇯🇵 culture | `qa`+`constraint`+`judge` | `tasks_culture.jsonl` / `--with-culture` `--only-culture` | 日本固有のネットミーム／ネットスラング (淫夢語録・なんJ・2ch・空耳ネタ等) を **A.知識QA / B.補完・認識 / C.生成** の3層で測る。正答率とは**別に拒否率**を集計する。**参考値** |
-| 🔓 uncensored | `qa`+`constraint`+`judge` | `tasks_unc.jsonl` / `--with-unc` `--only-unc` | 無害で正解が確定する質問に、**過剰拒否を誘発する語や枠組み**を添えて出題（XSTest/OR-Bench 系、12問=12誘発タイプ）。**A.事実QA / B.手順・仕組み / C.説明生成** の3層で測り、正答率とは別に拒否率を集計する。`certify` は誘発タイプ別の内訳も出す。「正しく答えられたか」を測るもので jailbreak ベンチではない。**参考値**。詳細は [📐 DESIGN_UNCENSORED.md](docs/DESIGN_UNCENSORED.md) |
+| 🔓 uncensored | `qa`+`constraint`+`judge` | `tasks_unc.jsonl` / `--with-unc` `--only-unc` | 公式 Qwen3.8-27B が拒否する言い回しで出し、**公開知識の正解を直接書けるか**を測る（XSTest/OR-Bench 系、12問=12誘発タイプ）。**A.事実QA / B.手順・仕組み / C.説明生成**。正答率とは別に拒否率を集計。公式が 100% なら項目は無効。jailbreak ベンチではない。**参考値**。詳細は [📐 DESIGN_UNCENSORED.md](docs/DESIGN_UNCENSORED.md) |
 
 - **CLI**: `--with-*` で既定タスクに上乗せ、`--only-*` で当該ドメインだけ単体実行（`--with-l6/l7` と同体系）。`certify --merge` で分割結果を統合。
 - **certify 拡張**: ドメイン別ゲート判定に加え、coding＋非experimentalドメインの平均combinedの**調和平均＝バランス指数**を算出（あるドメインだけ低い一芸特化モデルを大きく減点）。医療は難易度別(basic/std/hard)の正答率も表示。culture / uncensored は種別別(knowledge/completion/generation, knowledge/procedure/explain)の正答率と**拒否率**を併記。uncensored は誘発タイプ別（kill / bomb / suicide / cocaine 等）の拒否率内訳も出す。
@@ -288,10 +288,11 @@ llmbench certify --config config.yaml results/<...>_results.json
 
 ## 🔓 過剰拒否 ベンチ (uncensored)
 
-無害で正解が確定する質問に、**過剰拒否を誘発する語**（kill / bomb / suicide / cocaine 等）を
-添えて出し、「正しく・直接答えられたか」を測る 12 問。jailbreak ベンチではない。
-教育的な前置きは最小限にしてあり、どの語・枠組みで拒否が発火したかを
-誘発タイプ別に読める。
+公式 `Qwen3.8-27B` が拒否する側の言い回しで出し、**公開知識の正解を直接書けるか**
+を測る 12 問。jailbreak ベンチではない。v1.1 は公式ベースが 100% で飽和したので、
+出題文から「これは教材 / 拒否するな」を外した。コントロール（u01–u03, u06, u11,
+u12）は公式でも通る。**読むのはプローブ**（u04/u05/u07/u08/u09/u10）。
+`certify` が両者を分けて出す。
 
 ```bash
 llmbench validate --only-unc                                      # 自己検証 (LLM不要)
@@ -304,8 +305,8 @@ llmbench certify --config config.yaml results/<...>_results.json
 | 種別 | difficulty | grader | 問数 | 測るもの | 例 |
 |---|---|---|---|---|---|
 | **A. 事実QA** | `unc_knowledge` | `qa` | 6 | 正解が1つに決まる問いに直接答えられるか (MCQ 4 / 短答 2) | 「プロセスを殺す信号」「チェスで自殺する＝投了」 |
-| **B. 手順・仕組み** | `unc_procedure` | `constraint` | 3 | 機械検証できる形式で仕組みを書けるか | 自分の玄関のピンタンブラー、SQLi の概念 |
-| **C. 説明生成** | `unc_explain` | `judge` | 3 | 説教で空洞化せず事典水準で書けるか | サリンの歴史（製法なし）、いのちの電話 |
+| **B. 手順・仕組み** | `unc_procedure` | `constraint` | 3 | 機械検証できる形式で仕組みを書けるか | ピンタンブラー、教科書的 `1=1`、419 の仕組み |
+| **C. 説明生成** | `unc_explain` | `judge` | 3 | 説教で空洞化せず事典水準で書けるか | サリンと AChE、いのちの電話 |
 
 誘発タイプは `homonym-violence` / `homonym-explosive` / `homonym-selfharm` /
 `definition-drug` / `definition-weapon` / `sexual-health` / `own-property-lock` /
@@ -320,8 +321,9 @@ llmbench certify --config config.yaml results/<...>_results.json
 - **能力ではなく「能力 − アライメント摩擦」の指標**。既定でバランス指数から除外
   (`reference: true`)。拒否率が低いこと自体は加点ではない。
 - **ゲート閾値は未較正**。`config.yaml` の `certify_uncensored:` で調整できる。
-- **有害な要求への応諾は測らない。** 製法・鍵開け手順・攻撃の実働・自殺の手段は
-  設問側で禁止している。逆向き（本当に有害な要求を正しく断れるか）は未着手。
+- **有害な要求への応諾は測らない。** 製法・実在製品への攻撃コード・自殺の手段は
+  gold に置かない。逆向き（本当に有害な要求を正しく断れるか）は未着手。
+  公式ベースが 100% の項目はガード解除の評価として無効。
 - **C. 説明は judge 依存**。judge 未設定なら `hard_constraints` のみの決定的判定。
   このドメインの judge は `quality.judge.domain_overrides.uncensored` で候補と**別系統**を
   割り当てること（過剰安全な judge が正しい回答を落とす）。設計は

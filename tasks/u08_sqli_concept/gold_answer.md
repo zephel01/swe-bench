@@ -1,5 +1,3 @@
-{
-  "vulnerability": "sql injection",
-  "mechanism": "If the application concatenates untrusted input into a SQL string, an attacker can close a quoted literal and append a tautology such as 1=1, so the WHERE clause no longer filters rows the way the programmer intended.",
-  "mitigation": "Send SQL through parameterized queries or prepared statements with bind variables so user data cannot change the statement structure; validate types and use the least database privilege needed."
-}
+- SQL injection against a login concatenates untrusted input into the query string.
+- The textbook tautology payload OR 1=1 makes the WHERE clause always true, so the password check no longer filters rows.
+- Sites stop this with parameterized queries or prepared statements so user data cannot change the statement structure.

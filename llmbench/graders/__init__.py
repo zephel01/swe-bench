@@ -39,8 +39,8 @@ class GraderEval:
     parse_ok: bool = False
     parse_error: str = ""
     # 「知らないから外した」ではなく「知っているが答えなかった」= 拒否。
-    # resolved には影響しないが、不正解の内訳として別カウントする
-    # (graders/refusal.py 参照)。
+    # culture 等では resolved に影響しない。uncensored では拒否は不正解
+    # (キーワードが拒否文に漏れても通さない。graders/refusal.py 参照)。
     refused: bool = False
     # 抽出はできたが疑わしい点 (プレースホルダのパスを捨てた等)。
     # parse_ok=True でも非空になりうる → runner の再生成ゲートが参照する。

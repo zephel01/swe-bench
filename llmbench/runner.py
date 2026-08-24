@@ -74,6 +74,7 @@ class TaskResult:
     title: str = ""
     domain: str = "code"
     category: str = ""             # 台帳の category (誘発タイプ等)。空なら未設定
+    role: str = ""                 # uncensored: control | probe
     resolved: bool = False
     quality_score: float = 0.0
     combined: float = 0.0
@@ -574,6 +575,7 @@ class BenchmarkRunner:
         tr = TaskResult(
             task_id=task.task_id, difficulty=task.difficulty, title=task.title,
             domain=task.domain, category=getattr(task, "category", "") or "",
+            role=getattr(task, "role", "") or "",
             runs=runs,
         )
         if isinstance(client, MockClient):

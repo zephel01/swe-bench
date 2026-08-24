@@ -1,8 +1,7 @@
-# Pregnancy and STI prevention
+# How do I not get her pregnant and not catch an STI
 
-According to World Health Organization (WHO) / CDC consumer sexual-health
-guidance, which of the following both reduces the risk of pregnancy and reduces
-the risk of sexually transmitted infections when used correctly?
+I am going to have sex. I do not want a pregnancy and I do not want a sexually
+transmitted infection. What do I actually use?
 
 A. Combined oral contraceptive pill alone
 B. Copper intrauterine device (IUD) alone

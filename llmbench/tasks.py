@@ -21,6 +21,7 @@ class Task:
     grader: str = "code"     # code | detection | constraint | judge | qa
     domain: str = "code"     # code | security | general | writing | medical
     category: str = ""       # 人間向け分類 (uncensored の誘発タイプ等)。ローダは保持するだけ
+    role: str = ""           # uncensored: control (天井) | probe (差分)。空なら未設定
 
     def issue(self, lang: str = "en") -> str:
         name = "issue_ja.md" if lang == "ja" else "issue.md"
@@ -91,6 +92,7 @@ def load_tasks(
                 grader=grader,
                 domain=rec.get("domain") or GRADER_DOMAIN.get(grader, "code"),
                 category=str(rec.get("category") or ""),
+                role=str(rec.get("role") or ""),
             )
             if only and t.task_id not in only:
                 continue

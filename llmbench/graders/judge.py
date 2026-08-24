@@ -101,7 +101,7 @@ class JudgeGrader(Grader):
             )
             if not ev.resolved:
                 ev.fail_reason = f"hard constraints failed: {hard_failed}"
-            _refusal.apply(ev, answer, raw_output)
+            _refusal.apply(ev, answer, raw_output, task)
             return ev
 
         # judge あり → seeds 回採点して平均
@@ -123,7 +123,7 @@ class JudgeGrader(Grader):
             comp["note"] = "judge produced no parseable score; fell back to hard gate"
             ev.components = {"judge": comp}
             ev.detail_output = "judge unparseable; hard gate only"
-            _refusal.apply(ev, answer, raw_output)
+            _refusal.apply(ev, answer, raw_output, task)
             return ev
         mean = sum(scores) / len(scores)
         comp.update({
@@ -139,7 +139,7 @@ class JudgeGrader(Grader):
         )
         if not ev.resolved:
             ev.fail_reason = f"judge {mean:.1f} < {pass_score}"
-        _refusal.apply(ev, answer, raw_output)
+        _refusal.apply(ev, answer, raw_output, task)
         return ev
 
     def mock_gold(self, task) -> str:
