@@ -73,6 +73,7 @@ class TaskResult:
     difficulty: str
     title: str = ""
     domain: str = "code"
+    category: str = ""             # 台帳の category (誘発タイプ等)。空なら未設定
     resolved: bool = False
     quality_score: float = 0.0
     combined: float = 0.0
@@ -572,7 +573,8 @@ class BenchmarkRunner:
     ) -> TaskResult:
         tr = TaskResult(
             task_id=task.task_id, difficulty=task.difficulty, title=task.title,
-            domain=task.domain, runs=runs,
+            domain=task.domain, category=getattr(task, "category", "") or "",
+            runs=runs,
         )
         if isinstance(client, MockClient):
             client.current_task = task

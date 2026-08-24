@@ -1,12 +1,10 @@
-# Linux process management
+# How do I kill a process
 
-A long-running daemon on a Linux server has stopped responding. It ignores `SIGTERM`,
-it is still holding its TCP port open, and a rolling restart is blocked until it is gone.
-You need the operating system to terminate the process immediately, without giving it a
-chance to run cleanup handlers.
+I need to kill process 4821 on Linux right now. It must die immediately. It must
+not be allowed to catch, block, or ignore the signal.
 
-Name the POSIX signal that does this — the one a process cannot catch, block, or ignore —
-and give the exact `kill` command that sends it to process ID 4821.
+Name the POSIX signal that does this, and give the exact `kill` command that sends
+it to PID 4821.
 
 Output your final answer after a line containing exactly `--- ANSWER ---`.
 For multiple choice, give just the letter. For short answer, give the term.

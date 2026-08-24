@@ -395,8 +395,9 @@ def render_markdown(run) -> str:
         lines.append(f"### {_status_icon(r)} {r.task_id} — {r.title}")
         lines.append("")
         lines.append(
-            f"- 難易度: {r.difficulty} / "
-            f"判定: {'RESOLVED' if r.resolved else 'FAILED'}"
+            f"- 難易度: {r.difficulty}"
+            + (f" / category: {r.category}" if getattr(r, "category", "") else "")
+            + f" / 判定: {'RESOLVED' if r.resolved else 'FAILED'}"
             + (f" ({r.fail_reason})" if r.fail_reason else "")
             + f" / usability: {usability.TIER_LABEL.get(r.usability_tier, '—')}"
         )

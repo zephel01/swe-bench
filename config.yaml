@@ -132,7 +132,7 @@ models:
   local-ollama:
     type: ollama
     base_url: "http://localhost:11434"
-    model: "qwen2.5-coder:32b"
+    model: "gemma4:26b"
     temperature: 0.2
     max_tokens: 4096
     timeout: 1800            # 難デコイは長考する。600s では Read timeout に当たった
@@ -212,7 +212,7 @@ models:
   opencode-go:
     type: openai
     base_url: "https://opencode.ai/zen/go/v1"
-    model: "glm-5.3"
+    model: "ox-alpha-free"
     api_key: "${OPENCODE_GO_API_KEY}"
     temperature: 0.2
     max_tokens: 24576

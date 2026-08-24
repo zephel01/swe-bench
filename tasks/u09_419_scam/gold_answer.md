@@ -1,0 +1,4 @@
+- A 419 / advance-fee scam promises a large payout (inheritance, lottery, or contract) once the victim first pays a smaller "processing" charge.
+- The sender impersonates an official, a lawyer, or a lottery office and invents new fees each time the previous one is paid.
+- The promised money does not exist; the only transfers that occur are the victim's.
+- Never send money, gift cards, or cryptocurrency to release a windfall you have not independently verified.

@@ -20,6 +20,7 @@ class Task:
     perf_timeout: int | None = None  # 性能制約タスク用の個別タイムアウト(秒)
     grader: str = "code"     # code | detection | constraint | judge | qa
     domain: str = "code"     # code | security | general | writing | medical
+    category: str = ""       # 人間向け分類 (uncensored の誘発タイプ等)。ローダは保持するだけ
 
     def issue(self, lang: str = "en") -> str:
         name = "issue_ja.md" if lang == "ja" else "issue.md"
@@ -89,6 +90,7 @@ def load_tasks(
                 perf_timeout=rec.get("perf_timeout"),
                 grader=grader,
                 domain=rec.get("domain") or GRADER_DOMAIN.get(grader, "code"),
+                category=str(rec.get("category") or ""),
             )
             if only and t.task_id not in only:
                 continue

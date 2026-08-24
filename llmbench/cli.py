@@ -138,7 +138,8 @@ def _ledgers(args) -> list[str]:
 def cmd_list_tasks(args) -> int:
     tasks = load_tasks(Path(args.tasks_dir), ledgers=_ledgers(args))
     for t in tasks:
-        print(f"{t.task_id}  [{t.difficulty:6s}]  {t.title}  ({len(t.files)} files)")
+        cat = f"  {{{t.category}}}" if getattr(t, "category", "") else ""
+        print(f"{t.task_id}  [{t.difficulty:6s}]  {t.title}{cat}  ({len(t.files)} files)")
     print(f"total: {len(tasks)}")
     return 0
 

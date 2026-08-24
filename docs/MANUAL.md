@@ -110,9 +110,10 @@ results/
 | キー | 型 | 説明 |
 |---|---|---|
 | `task_id` | str | 例: `t001` |
-| `difficulty` | str | 台帳の `difficulty` をそのまま転記する自由文字列。コーディング7値（`easy` / `medium` / `hard` / `expert` / `frontier` / `architect` / `grandmaster`）+ ドメイン用11値（`sec_medium` / `sec_hard` / `gen_easy` / `gen_medium` / `write_basic` / `med_basic` / `med_std` / `med_hard` / `cul_knowledge` / `cul_completion` / `cul_generation`）の計18値。tier への対応は `certify.py` の `DIFFICULTY_TO_TIER` が正 |
+| `difficulty` | str | 台帳の `difficulty` をそのまま転記する自由文字列。コーディング7値（`easy` / `medium` / `hard` / `expert` / `frontier` / `architect` / `grandmaster`）+ ドメイン用（`sec_*` / `gen_*` / `write_basic` / `med_*` / `cul_knowledge` / `cul_completion` / `cul_generation` / `unc_knowledge` / `unc_procedure` / `unc_explain`）。tier への対応は `certify.py` の `DIFFICULTY_TO_TIER` が正 |
 | `title` | str | タスクタイトル |
 | `domain` | str | `code` / `security` / `general` / `writing` / `medical` / `culture` / `uncensored`。既定 `"code"` |
+| `category` | str | 台帳の任意キー。空なら未設定。uncensored では誘発タイプ（`homonym-violence` 等）で、`certify` の誘発タイプ別表のキー。culture では `inmu` 等（certify は使わない） |
 | `resolved` | bool | テスト合格判定（多試行では success_rate≥0.5） |
 | `quality_score` | float | 0–100。多試行では**成功試行の平均** |
 | `combined` | float | 0–100。`success_rate × (floor + (1-floor)×quality/100) × 100` |
@@ -328,18 +329,18 @@ cat "results/$adir/t011/llm_output.txt"
 | `llmbench/clients/ollama.py` | `list_ollama_models()`（`/api/tags`） |
 | `llmbench/cli.py` | `models` / `compare` / **`certify`** サブコマンド・`--runs`/`--sample-temp`/**`--concurrency`**/`--label`/`--ollama-host`・**`--with-l6`/`--l6-ledger`**・**`--with-l7`/`--l7-ledger`**・**`--only-l6`/`--only-l7`（list-tasks/run/validate共通の`_common_args`）**・**`certify --merge`** |
 | `llmbench/certify.py` | **新規**。難易度→tier(L1-L7)、tier別gate判定（`certify`/`render_certificate_md`）。使えるライン=L4独立合格・**architect→L6 gate**・**grandmaster→L7 gate（暫定・天井評価用）**・**`merge_results()`（複数results.jsonの合算。task_id後勝ち・model名を出現順distinctで` + `連結）/ `certify --merge`（単体スクリプトでも`python3 certify.py --merge`で対応）** |
-| `llmbench/tasks.py` | `Task.perf_timeout` フィールド・**`load_tasks(..., ledgers=[...])` で複数台帳マージ（id先勝ち）** |
+| `llmbench/tasks.py` | `Task.perf_timeout` フィールド・**`Task.category`（台帳の任意キー。uncensored の誘発タイプ等）**・**`load_tasks(..., ledgers=[...])` で複数台帳マージ（id先勝ち）** |
 | `llmbench/runner.py` | per-task `perf_timeout` を採用（未指定時は `test_timeout`）・**`BenchmarkRunner(..., ledgers=...)`** |
 | `config.yaml` | `model:auto`・`run.runs`/`sample_temp`/`ollama_host`・`usability:`・`ref-gpt` |
 | `tasks/` | 難タスク t016–t020 + **L4 expert t021–t032 / L5 frontier t033–t040**（既定40タスク）+ **L6 architect t041–t060（別台帳 `tasks_l6.jsonl`・`--with-l6` で有効化）** + **L7 grandmaster 現行16問（別台帳 `tasks_l7.jsonl`・`--with-l7` で有効化。v1残留9問（t063, t064, t068, t069, t076, t085, t092, t093, t095）+ 新規7問（t101–t107。3多重oracle 4問 + 大規模リファクタ/仕様推論 3問）。旧40問（5軸×8問構成。t098のみ `perf_timeout: 30`）は `tasks_l7_v1.jsonl` に退避、`--l7-ledger tasks_l7_v1.jsonl` で実行可）** |
 | `llmbench/clients/cli_agent.py` | **新規**。`type: cli` バックエンド（サブスクCLI: `claude`/`codex`/`grok`/`custom` プリセット）。空の一時cwdでheadless実行し、実行モデルを検出して `served_model` に記録 |
 | `llmbench/graders/` | **新規パッケージ**（マルチドメイン評価）。`__init__.py`（グレーダーレジストリ + `GradeCtx`/`GraderEval`）・`checks.py`（IFEval式チェック群）・`code.py`（既存パイプラインのラップ）・`detection.py`（security）・`constraint.py`（general）・`judge.py`（writing・experimental）・`qa.py`（medical・reference value）・`refusal.py`（セーフティ拒否の検出。qa/constraint/judge から呼ばれ、**不正解時のみ**判定して `GraderEval.refused` を立てる）。各グレーダーは `(resolved, quality)` に正規化して返すため、既存の集計/pass@k/usability/certifyパイプラインは無改修 |
 | `llmbench/cli.py`（マルチドメイン） | **`--with-sec/gen/write/med/culture/unc`・`--only-sec/gen/write/med/culture/unc`**（`--with-l6/l7`と同体系。list-tasks/run/validate共通の`_common_args`を拡張） |
-| `llmbench/certify.py`（マルチドメイン） | **ドメイン別ゲート**（`certify_domains`）・**バランス指数**（coding＋非experimentalドメインの調和平均）・**医療の難易度別(med_basic/med_std/med_hard)正答率readout**・**過剰拒否の種別別(unc_knowledge/unc_procedure/unc_explain)正答率+拒否率readout**（`certify_uncensored`） |
+| `llmbench/certify.py`（マルチドメイン） | **ドメイン別ゲート**（`certify_domains`）・**バランス指数**（coding＋非experimentalドメインの調和平均）・**医療の難易度別(med_basic/med_std/med_hard)正答率readout**・**過剰拒否の種別別(unc_knowledge/unc_procedure/unc_explain)正答率+拒否率 + 誘発タイプ別内訳**（`certify_uncensored`） |
 | `llmbench/runner.py`（マルチドメイン） | **`JudgeSet`**（ドメイン別 judge 上書き。`quality.judge.domain_overrides` を `enabled` から独立に発火。`_make_judges()`/`_make_judge()`後方互換ラッパ） |
 | `llmbench/report.py`（マルチドメイン） | **「🌐 ドメイン別」**サマリ節を追加 |
 | `config.yaml`（マルチドメイン） | **`graders:`**（pass_f1/pass_ratio/pass_score）・**`quality.judge:`**（enabled/judge_model/seeds/**domain_overrides**）・**`certify_domains:`**・**`certify_uncensored:`**・参照モデル**`uncensored-ref`** |
-| `tasks/`（マルチドメイン） | **ドメインタスク追加**: security s01–s04（別台帳`tasks_sec.jsonl`、`--with-sec`）/ general g01–g03（`tasks_gen.jsonl`、`--with-gen`）/ writing w01–w02（`tasks_write.jsonl`、`--with-write`）/ medical m01–m24（`tasks_med.jsonl`、`--with-med`。難易度 med_basic7/med_std11/med_hard6、全問ファクトチェック済）/ culture c01–c24（`tasks_culture.jsonl`、`--with-culture`。日本のネットミーム知識。cul_knowledge12/cul_completion6/cul_generation6、grader は qa/constraint/judge を流用）/ uncensored u01–u05（`tasks_unc.jsonl`、`--with-unc`。過剰拒否 (over-refusal) 検査。unc_knowledge2/unc_procedure2/unc_explain1、grader は qa/constraint/judge を流用。詳細は `DESIGN_UNCENSORED.md`） |
+| `tasks/`（マルチドメイン） | **ドメインタスク追加**: security s01–s04（別台帳`tasks_sec.jsonl`、`--with-sec`）/ general g01–g03（`tasks_gen.jsonl`、`--with-gen`）/ writing w01–w02（`tasks_write.jsonl`、`--with-write`）/ medical m01–m24（`tasks_med.jsonl`、`--with-med`。難易度 med_basic7/med_std11/med_hard6、全問ファクトチェック済）/ culture c01–c24（`tasks_culture.jsonl`、`--with-culture`。日本のネットミーム知識。cul_knowledge12/cul_completion6/cul_generation6、grader は qa/constraint/judge を流用）/ uncensored u01–u12（`tasks_unc.jsonl`、`--with-unc`。過剰拒否 (over-refusal) 検査。unc_knowledge6/unc_procedure3/unc_explain3、12誘発タイプ。grader は qa/constraint/judge を流用。詳細は `DESIGN_UNCENSORED.md`） |
 
 > 検証状況: `llmbench validate` PASS（gold 40/40・broken 40/40）、selfcheck 既存20問 + **L6 20問 20/20** + **L7 16問 16/16**（v2。旧40問時代の記録は `TASKS.md` の「L7 v1」節を参照）、
 > `validate --with-l6` で gold 20/20・broken 20/20、`validate --with-l7` で gold 16/16・broken 16/16、
@@ -444,7 +445,7 @@ usability / certify は**一切変更せず**再利用される。
 | writing | `judge` | `tasks_write.jsonl` | `--with-write` / `--only-write` | **experimental**。`rubric.json` の `hard_constraints`（決定的ゲート、checkと同種kind）+ `criteria` + `pass_score`。judgeモデル設定時（`quality.judge.enabled`）は0-10点を`seeds`回平均し `quality=score×10`、`resolved=(score≥pass_score) かつ hard通過`。judge未設定時は `hard_constraints` のみで決定的判定（validate等はこの経路） |
 | medical | `qa` | `tasks_med.jsonl` | `--with-med` / `--only-med` | **参考値**。`gold.json` は `{"mode":"mcq","answer":"C"}`（選択肢一致）または `{"mode":"keyword","all":[...],"any":[...]}`（`all`を全て・`any`を1つ以上含む）。gold keywordは**日英両方**を含むため `--lang ja` の日本語モデルも正しく採点される |
 | culture | `qa`+`constraint`+`judge` | `tasks_culture.jsonl` | `--with-culture` / `--only-culture` | **参考値**。日本のネットミーム／ネットスラング（淫夢語録・なんJ・2ch・空耳ネタ）を **A.知識QA(`qa`, 12問) / B.補完・認識(`constraint`, 6問) / C.生成(`judge`, 6問)** の3層で測る。専用graderは持たず既存3種を流用し、台帳側で `domain: "culture"` を明示する。正答率とは**別に拒否率**を集計する（10.7参照） |
-| uncensored | `qa`+`constraint`+`judge` | `tasks_unc.jsonl` | `--with-unc` / `--only-unc` | **参考値**。無害で正解が確定する質問に、過剰拒否を誘発する語や枠組み（kill / disposal of drugs / traversal / lock / chemical weapons 等）を添えて出題する over-refusal (XSTest/OR-Bench 系) ベンチ。**A.事実QA(`qa`, 2問) / B.手順・仕組み(`constraint`, 2問) / C.説明生成(`judge`, 1問)** の3層で測る。専用graderは持たず既存3種を流用し、台帳側で `domain: "uncensored"` を明示する。jailbreak ベンチではなく、有害な要求への応諾は測らない。正答率とは**別に拒否率**を集計する（10.7参照）。詳細設計は `DESIGN_UNCENSORED.md` |
+| uncensored | `qa`+`constraint`+`judge` | `tasks_unc.jsonl` | `--with-unc` / `--only-unc` | **参考値**。無害で正解が確定する質問に、過剰拒否を誘発する語や枠組み（kill / bomb / suicide / cocaine / rifle / break into / SQL injection / sarin 等）を添えて出題する over-refusal (XSTest/OR-Bench 系) ベンチ。**A.事実QA(`qa`, 6問) / B.手順・仕組み(`constraint`, 3問) / C.説明生成(`judge`, 3問)** の3層、12誘発タイプで測る。専用graderは持たず既存3種を流用し、台帳側で `domain: "uncensored"` を明示する。jailbreak ベンチではなく、有害な要求への応諾は測らない。正答率とは**別に拒否率**を集計し、`certify` は誘発タイプ別の内訳も出す（10.7参照）。詳細設計は `DESIGN_UNCENSORED.md` |
 
 ### 10.3 CLI
 
@@ -500,7 +501,8 @@ certify_uncensored:              # 過剰拒否 種別別 参考gate (正答率)
 - **ネットミームdetail readout**: 全体正答率 + 種別別（cul_knowledge/cul_completion/cul_generation）の
   正答率と**拒否率**。拒否率が高いモデルの低い正答率は「知らない」ではなく「答えない」ことを意味する
 - **過剰拒否detail readout**: 全体正答率 + 種別別（unc_knowledge/unc_procedure/unc_explain）の
-  正答率と**拒否率**。出題は無害で正解が確定する問いのみで、拒否率が低いこと自体は加点ではない。
+  正答率と**拒否率** + **誘発タイプ別**（kill / bomb / suicide / cocaine 等）の内訳。
+  出題は無害で正解が確定する問いのみで、拒否率が低いこと自体は加点ではない。
   正答率も拒否率も低いモデルは「拒否しなくなった代わりに知識・指示追従が壊れた」可能性を疑う
 
 `report.md` にも「🌐 ドメイン別」サマリ節（拒否タスク数の列を含む）が追加される。出力例と詳しい読み方は `USAGE.md` を参照。
@@ -515,7 +517,7 @@ certify_uncensored:              # 過剰拒否 種別別 参考gate (正答率)
   （省略時は既定値が使われます）。
 - uncensored ドメインの judge 上書き（`quality.judge.domain_overrides`）は `quality.judge.enabled` から
   **独立に発火**する。`uncensored: uncensored-ref` の行を書けば `enabled: false` のままでも
-  `unc_explain`（judge grader、5問中1問）だけがその judge で採点され、writing 等の採点方式は変わらない。
+  `unc_explain`（judge grader、12問中3問）だけがその judge で採点され、writing 等の採点方式は変わらない。
   `llmbench validate`（MockClient）では上書き・グローバルとも一切構築しない。詳細は `DESIGN_UNCENSORED.md` §2.3。
 - judge を有効化する場合、self-preference回避のため候補モデルとは別系統の `judge_model` を推奨。
 - 医療タスク（m01–m24）は薬理/循環器/救急・第一選択/内分泌/感染症/腎・生理/神経/小児/産婦人科/検査・中毒の
@@ -523,6 +525,8 @@ certify_uncensored:              # 過剰拒否 種別別 参考gate (正答率)
 - ドメインタスクの一覧・ディレクトリ構成・goldスキーマは `TASKS.md` を参照。
 - culture タスク（c01–c24）は淫夢語録12問 / なんJ3問 / 2ch4問 / 空耳・ゲーム系4問 / 混在1問。
   ミームは陳腐化するため定期的な棚卸しが必要（回転の速いVTuber用語などは意図的に除外している）。
+- uncensored タスク（u01–u12）は 12 誘発タイプを1問ずつ持つ。教育的な前置きは最小限。
+  製法・鍵開け手順・攻撃の実働・自殺の手段は設問側で禁止。一覧は `TASKS.md`。
 
 ### 10.7 拒否 (refusal) の検出と集計
 
@@ -540,8 +544,10 @@ judge の3グレーダーから呼ばれる。
 | 記録先 | `GraderEval.refused` → `Attempt.refused` → `TaskResult.{refused, n_refused}` → results.json / summary の `n_refused_tasks` `n_refused_attempts` |
 | 失敗理由 | `fail_reason` の先頭に `refusal: ` が付く |
 
-culture 以外のドメインでも同じ機構が働く（拒否が起きなければ全て 0 のまま）。旧 results.json は
-`n_refused` を持たないため、`certify` は拒否率 0% として扱う。
+culture / uncensored 以外のドメインでも同じ機構が働く（拒否が起きなければ全て 0 のまま）。
+旧 results.json は `n_refused` を持たないため、`certify` は拒否率 0% として扱う。
+uncensored の `certify` は層別（知識/手順/説明）に加え、`category`（誘発タイプ）別の
+正答率と拒否率も出す。タイプ別は合否ゲートを持たない診断表。
 
 ---
 

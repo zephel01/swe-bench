@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import pytest
 
 from llmbench.certify import (
-    DEFAULT_DOMAIN_GATES, DEFAULT_UNC_GATES, certify_domains,
-    certify_uncensored, render_uncensored_md,
+    DEFAULT_DOMAIN_GATES, DEFAULT_UNC_GATES, UNC_CAT_ORDER,
+    certify_domains, certify_uncensored, render_uncensored_md,
 )
 from llmbench.cli import _ledgers
 from llmbench.clients.mock import MockClient
@@ -50,7 +50,7 @@ def _tasks() -> dict:
 
 def test_ledger_exists():
     assert LEDGER.exists(), f"台帳が無い: {LEDGER}"
-    assert len(_records()) >= 5
+    assert len(_records()) >= 12
 
 
 @pytest.mark.parametrize("rec", _records(), ids=lambda r: r["task_id"])
@@ -69,13 +69,35 @@ def test_task_dir_is_complete(rec):
 
 def test_ledger_covers_all_three_layers():
     """知識/手順/説明の3層が全て存在すること (どれか1層だけの偏りを防ぐ)."""
-    assert {r["difficulty"] for r in _records()} == VALID_DIFFICULTY
+    recs = _records()
+    assert {r["difficulty"] for r in recs} == VALID_DIFFICULTY
+    by = {}
+    for r in recs:
+        by.setdefault(r["difficulty"], 0)
+        by[r["difficulty"]] += 1
+    # 誘発タイプを層をまたいで見られるよう、各層に複数問を置く
+    assert by["unc_knowledge"] >= 6
+    assert by["unc_procedure"] >= 3
+    assert by["unc_explain"] >= 3
+
+
+def test_ledger_categories_are_unique_and_known():
+    """1問1誘発タイプ。certify の診断表と台帳がズレないこと."""
+    recs = _records()
+    cats = [r.get("category") for r in recs]
+    assert all(cats), "全問に category が要る"
+    assert len(cats) == len(set(cats)), f"category が重複: {cats}"
+    unknown = set(cats) - set(UNC_CAT_ORDER)
+    assert not unknown, f"UNC_CAT_ORDER に無い category: {unknown}"
+    missing = set(UNC_CAT_ORDER) - set(cats)
+    assert not missing, f"台帳に無い UNC_CAT_ORDER: {missing}"
 
 
 def test_ledger_loads():
     tasks = load_tasks(TASKS_DIR, ledgers=["tasks_unc.jsonl"])
     assert len(tasks) == len(_records())
     assert all(t.domain == "uncensored" for t in tasks)
+    assert all(t.category for t in tasks)
 
 
 # --- validate 不変条件 (judge 無しで決定的に緑/赤になること) -------------
@@ -204,6 +226,27 @@ def test_certify_uncensored_separates_accuracy_and_refusal():
     assert tiers["unc_knowledge"]["refusal_rate"] == pytest.approx(0.5)
     assert tiers["unc_explain"]["refusal_rate"] == pytest.approx(1.0)
     assert "拒否率" in render_uncensored_md(cu)
+    # category が無い旧 results では誘発タイプ表は出さない
+    assert cu["categories"] == []
+    assert "誘発タイプ" not in render_uncensored_md(cu)
+
+
+def test_certify_uncensored_breaks_out_refusal_by_category():
+    results = [
+        {**_fake("unc_knowledge", 1.0, n_refused=0), "category": "homonym-violence"},
+        {**_fake("unc_knowledge", 0.0, n_refused=1), "category": "definition-drug"},
+        {**_fake("unc_explain", 0.0, n_refused=1), "category": "suicide-prevention"},
+    ]
+    cu = certify_uncensored(results)
+    cats = {r["category"]: r for r in cu["categories"]}
+    assert cats["homonym-violence"]["refusal_rate"] == pytest.approx(0.0)
+    assert cats["definition-drug"]["refusal_rate"] == pytest.approx(1.0)
+    assert cats["suicide-prevention"]["refusal_rate"] == pytest.approx(1.0)
+    md = render_uncensored_md(cu)
+    assert "誘発タイプ" in md
+    assert "同音異義: kill" in md
+    assert "定義: コカイン" in md
+    assert "公衆衛生: 自殺相談" in md
 
 
 def test_certify_uncensored_ignores_other_domains():

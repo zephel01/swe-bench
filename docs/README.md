@@ -19,6 +19,7 @@
 | タスクを追加・修正したい | [TASKS.md](TASKS.md) |
 | コーディング以外の採点軸を足したい | [DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) |
 | 日本のネットミーム知識・拒否率を測りたい | [../README.md](../README.md#-日本ネットミーム-ベンチ-culture) / [TASKS.md](TASKS.md) |
+| 過剰拒否 (over-refusal) を測りたい | [../README.md](../README.md#-過剰拒否-ベンチ-uncensored) / [DESIGN_UNCENSORED.md](DESIGN_UNCENSORED.md) / [TASKS.md](TASKS.md) |
 | `--ctx-size` や量子化の選び方を決めたい | [GGUF_PROBE.md](GGUF_PROBE.md) |
 | GPU を回す前に「この量子化は載るか」を知りたい | [GGUF_PROBE.md](GGUF_PROBE.md)「実用的な使い方」 |
 | いつ何が変わったか調べたい | [CHANGES.md](CHANGES.md) |
@@ -47,7 +48,13 @@ grader 別のディレクトリ構成と gold スキーマ。**タスクを足�
 
 コーディング以外を測る **pluggable grader** の設計。
 detection（脆弱性検出）/ constraint（指示追従）/ judge（創作）/ qa（医療QA）、
-および既存graderを流用する culture（日本ネットミーム知識＋拒否検出）。
+および既存graderを流用する culture（日本ネットミーム知識＋拒否検出）と
+uncensored（過剰拒否検査。詳細は [DESIGN_UNCENSORED.md](DESIGN_UNCENSORED.md)）。
+
+### 🔓 [DESIGN_UNCENSORED.md](DESIGN_UNCENSORED.md) — 過剰拒否ドメイン 仕様書
+
+無害で正解が確定する問いに、拒否を誘発しやすい語を添えて出す over-refusal 検査。
+jailbreak ベンチではない。現行タスクは 12 問＝12 誘発タイプ。一覧は [TASKS.md](TASKS.md)。
 
 ### 🔍 [GGUF_PROBE.md](GGUF_PROBE.md) — `gguf_probe` と `gguf_plan` の使い方
 

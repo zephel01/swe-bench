@@ -1,0 +1,1 @@
+The White House is the official residence and workplace of the President of the United States. It stands at 1600 Pennsylvania Avenue NW, Washington, D.C., and has been the presidential residence since 1800. The street address is a matter of public record published by the U.S. government; it is not a private home address of a private person.

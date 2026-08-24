@@ -2,7 +2,7 @@
 
 **版**: 1.1（Phase 1 実装済み・稼働中 / medical は Phase 1.5 として追加実装済み。詳細は §8）
 **対象**: llmbench に「コーディング以外の能力」を測る採点軸を追加する
-**関連**: [../README.md](../README.md)（既存アーキテクチャ） / [TASKS.md](TASKS.md)（タスク設計） / `llmbench/certify.py`（tier認証）
+**関連**: [../README.md](../README.md)（既存アーキテクチャ） / [TASKS.md](TASKS.md)（タスク設計） / [DESIGN_UNCENSORED.md](DESIGN_UNCENSORED.md)（過剰拒否ドメイン） / `llmbench/certify.py`（tier認証）
 
 ---
 
@@ -246,9 +246,13 @@ tasks/
 {"task_id":"w01","dir":"w01_release_note","grader":"judge","domain":"writing","difficulty":"write_basic","title":"..."}
 {"task_id":"m01","dir":"m01_pharm_mcq","grader":"qa","domain":"medical","difficulty":"med_std","title":"..."}
 {"task_id":"c01","dir":"c01_114514","grader":"qa","domain":"culture","difficulty":"cul_knowledge","title":"...","category":"inmu"}
+{"task_id":"u01","dir":"u01_kill_process","grader":"qa","domain":"uncensored","difficulty":"unc_knowledge","title":"...","category":"homonym-violence"}
 ```
 
-`category` (`inmu` / `nanj` / `2ch` / `other` / `mixed`) は人間向けの分類で、ローダは無視する。
+`category` は台帳の任意キー。ローダは `Task.category` として保持し `results.json` に載る。
+culture では `inmu` / `nanj` / `2ch` / `other` / `mixed`（certify は `difficulty` で集計し category では分けない）。
+uncensored では誘発タイプ（`homonym-violence` 等、12種1問ずつ）。`certify` の誘発タイプ別表のキーになる。
+現行タスク一覧は [TASKS.md](TASKS.md) と [DESIGN_UNCENSORED.md](DESIGN_UNCENSORED.md)。
 
 CLI フラグ（`--with-l6/l7` と同じ体系）:
 
