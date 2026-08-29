@@ -111,10 +111,16 @@ MTP_AUTO="${MTP_AUTO:-1}"                # 1 で MTP の有無を gguf から判
                                          # (付けたまま起動すると llama-server は
                                          #  "model doesn't contain MTP layers" で
                                          #  起動に失敗する)。0 で従来どおり素通し
+MTP_DETECT="${MTP_DETECT:-auto}"         # auto = gguf_probe.py が使えればそれで判定し、
+                                         # 駄目ならヘッダを grep する。
+                                         # grep = 常に grep (gguf パッケージ不要)
 MTP_SCAN_BYTES="${MTP_SCAN_BYTES:-33554432}"
-                                         # MTP 判定で読む先頭バイト数 (既定 32MiB)。
-                                         # テンソル名は gguf のヘッダに全部あるので
-                                         # ここだけ読めば足りる
+                                         # MTP 判定でまず読む先頭バイト数 (既定 32MiB)。
+                                         # テンソル名は gguf のヘッダにあるので通常はここで足りる
+MTP_SCAN_MAX_BYTES="${MTP_SCAN_MAX_BYTES:-536870912}"
+                                         # 上で見つからないときに読む範囲 (既定 512MiB)。
+                                         # 語彙の大きいモデルはヘッダが 32MiB を超えることが
+                                         # あるので、「無し」と判定する前にここまで確認する
 SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-0}"    # 1 で llmbench の preflight を省略
 RESUME="${RESUME:-1}"                    # 1 で完了済み(quant,suite)をスキップ
 DRY_RUN="${DRY_RUN:-0}"                  # 1 でコマンド表示のみ
@@ -363,8 +369,49 @@ port_busy() { [[ "$(health_code)" != "000" ]]; }
 # gguf に MTP (nextn) テンソルがあるか。
 #   テンソル名は gguf のヘッダにまとまって置かれているので、先頭だけ読めば分かる。
 #   gguf パッケージも python も要らない。分割 gguf は先頭シャードにヘッダがある。
+# gguf に MTP テンソルがあるか。
+#
+#   判定はリポジトリの gguf_probe.py を一次情報にする。テンソル名の付き方は
+#   モデルによって nextn / mtp / multi_token と揺れるので、自前のパターンで
+#   決め打ちすると取りこぼす (実測で踏んだ)。gguf_probe が使えないときだけ
+#   ヘッダを直接 grep する。
+#
+#   ⚠️ フォールバックの grep を `head | grep -q` にしてはいけない。grep が一致した
+#      時点で終了して head が SIGPIPE で死に、pipefail がその 141 を拾って
+#      「一致しなかった」ことになる。プロセス置換で grep の終了コードだけを見る。
+#   ⚠️ 誤判定の向きは「無い」と言うほうが危険 (黙って MTP を外す = 2倍遅くなる)。
+#      付いていて非対応ならサーバが起動に失敗して必ず気づくので、迷ったら広く読む。
+MTP_DETECT_BY=""
+
+_gguf_python() {          # gguf パッケージが import できる python を探す
+  local p
+  for p in "$(dirname "$LLMBENCH")/python3" "$(dirname "$LLMBENCH")/python" python3 python; do
+    command -v "$p" >/dev/null 2>&1 || continue
+    if "$p" -c 'import gguf' >/dev/null 2>&1; then printf '%s' "$p"; return 0; fi
+  done
+  return 1
+}
+
 gguf_has_mtp() {
-  head -c "$MTP_SCAN_BYTES" "$1" 2>/dev/null | LC_ALL=C grep -qa 'nextn'
+  local f="$1" py n
+  if [[ "$MTP_DETECT" != "grep" && -f "$REPO_DIR/gguf_probe.py" ]] && py="$(_gguf_python)"; then
+    n="$("$py" "$REPO_DIR/gguf_probe.py" "$f" 2>/dev/null \
+         | sed -n 's/.*MTP\/nextn[^:]*: *\([0-9][0-9]*\) *本.*/\1/p' | head -1)"
+    if [[ -n "$n" ]]; then
+      MTP_DETECT_BY="gguf_probe(${n}本)"
+      (( n > 0 ))
+      return
+    fi
+  fi
+  MTP_DETECT_BY="grep"
+  for n in "$MTP_SCAN_BYTES" "$MTP_SCAN_MAX_BYTES"; do
+    [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 )) || continue
+    if LC_ALL=C grep -qaE 'blk\.[0-9]+\.(nextn|mtp|multi_token)' \
+         < <(head -c "$n" "$f" 2>/dev/null); then
+      return 0
+    fi
+  done
+  return 1
 }
 
 # SERVER_ARGS から --spec-type draft-mtp (と --spec-type=draft-mtp) を取り除く
@@ -404,13 +451,14 @@ build_server_args() {
   done
   if (( requested )); then
     if [[ "$MTP_AUTO" == "1" ]] && ! gguf_has_mtp "$gguf"; then
-      warn "  ⚠️ この gguf に MTP(nextn) テンソルがないため --spec-type draft-mtp を外します"
+      warn "  ⚠️ この gguf に MTP テンソルがないため --spec-type draft-mtp を外します [判定: ${MTP_DETECT_BY:-?}]"
       warn "     (付けたままだと llama-server は起動に失敗します)"
       warn "     速度は MTP 有りの量子化と比較できません。manifest の mtp 列を確認すること"
       strip_mtp_args
       MTP_USED="no"
     else
       MTP_USED="yes"
+      log "  MTP 判定: ${MTP_DETECT_BY:-?}"
     fi
   fi
   return 0
