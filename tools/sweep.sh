@@ -5,9 +5,11 @@
 #  1量子化ごとに llama-server を起動し、有効化したスイート (l6 / l7 / culture /
 #  unc) を順に走らせ、サーバを落として次の量子化へ進む。
 #
-#  使い方:  tools/sweep.sh [オプション]    # 全設定は下のブロックで指定
+#  使い方:  cp tools/sweep.conf.example tools/sweep.conf   # 実パスを書く (git管理外)
 #           tools/sweep.sh --list         # 実行対象を確認するだけ
 #           tools/sweep.sh --dry-run      # コマンドを表示するだけ
+#           tools/sweep.sh                # 本番
+#  設定は下のブロック / tools/sweep.conf / 環境変数 / CLI の順で上書きされる。
 #  詳細は docs/SWEEP.md
 # =============================================================================
 
@@ -22,15 +24,17 @@
 #   tools/sweep.sh として置く限り、どこに clone しても書き換え不要。
 _SWEEP_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$(dirname "$_SWEEP_SELF_DIR")}"   # llmbench リポジトリ
-LLMBENCH="${LLMBENCH:-$REPO_DIR/.venv/bin/llmbench}"    # llmbench 実行ファイル
-CONFIG="${CONFIG:-$REPO_DIR/config.yaml}"               # llmbench の config.yaml
-TASKS_DIR="${TASKS_DIR:-$REPO_DIR/tasks}"               # タスク台帳ディレクトリ
+#   ↓ 空のままなら REPO_DIR から導出する (設定ファイルで REPO_DIR を変えても追随する)。
+#     個別に別の場所を指したいときだけ値を書く。
+LLMBENCH="${LLMBENCH:-}"        # 既定: $REPO_DIR/.venv/bin/llmbench
+CONFIG="${CONFIG:-}"            # 既定: $REPO_DIR/config.yaml
+TASKS_DIR="${TASKS_DIR:-}"      # 既定: $REPO_DIR/tasks
+OUT_ROOT="${OUT_ROOT:-}"        # 既定: $REPO_DIR/_OUTPUTS/sweep  (ログ/state/サマリ)
+RESULTS_DIR="${RESULTS_DIR:-}"  # 既定: $REPO_DIR/results         (llmbench --output)
 MODEL_KEY="${MODEL_KEY:-local-openai}"                  # config.yaml の models: キー
 MODEL_DIR="${MODEL_DIR:-/llm/models/Qwen3.8-27B-GGUF}"  # gguf の置き場
 MODEL_PREFIX="${MODEL_PREFIX:-Qwen3.8-27B}"             # <PREFIX>-<QUANT>.gguf
 LLAMA_SERVER="${LLAMA_SERVER:-llama-server}"            # llama-server のパス
-OUT_ROOT="${OUT_ROOT:-$REPO_DIR/_OUTPUTS/sweep}"        # ログ/state/サマリの出力先
-RESULTS_DIR="${RESULTS_DIR:-$REPO_DIR/results}"         # llmbench --output
 
 # ── 対象量子化 ───────────────────────────────────────────────────────────
 #   明示リスト … "Q4_K_M Q6_K Q8_0"  (スペース or カンマ区切り)
@@ -107,25 +111,54 @@ set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
 
-# --- 外部設定ファイル (-c / SWEEP_CONF) ------------------------------------
+# --- 設定ファイル -----------------------------------------------------------
+#   優先順: -c で明示 > 環境変数 SWEEP_CONF > tools/sweep.conf > <repo>/sweep.conf
+#   --no-conf を付けると自動読み込みを止め、このスクリプトの既定値だけで走る。
+#   conf は plain な代入 (VAR=値) で上のブロックを上書きする。CLI オプションが最優先。
 _argv=("$@")
+_conf_explicit=""
+_no_conf=0
 for ((_i = 0; _i < ${#_argv[@]}; _i++)); do
   case "${_argv[$_i]}" in
-    -c|--conf) SWEEP_CONF="${_argv[$((_i + 1))]:-}" ;;
-    --conf=*)  SWEEP_CONF="${_argv[$_i]#--conf=}" ;;
+    -c|--conf)  _conf_explicit="${_argv[$((_i + 1))]:-}" ;;
+    --conf=*)   _conf_explicit="${_argv[$_i]#--conf=}" ;;
+    --no-conf)  _no_conf=1 ;;
   esac
 done
-if [[ -n "$SWEEP_CONF" ]]; then
-  [[ -f "$SWEEP_CONF" ]] || { echo "設定ファイルが無い: $SWEEP_CONF" >&2; exit 1; }
-  # shellcheck disable=SC1090
-  source "$SWEEP_CONF"
+
+SWEEP_CONF_LOADED=""
+if [[ "$_no_conf" != "1" ]]; then
+  if [[ -n "$_conf_explicit" ]]; then
+    [[ -f "$_conf_explicit" ]] || { echo "設定ファイルが無い: $_conf_explicit" >&2; exit 1; }
+    SWEEP_CONF="$_conf_explicit"
+  elif [[ -n "$SWEEP_CONF" ]]; then
+    [[ -f "$SWEEP_CONF" ]] || { echo "設定ファイルが無い: $SWEEP_CONF" >&2; exit 1; }
+  else
+    for _c in "$_SWEEP_SELF_DIR/sweep.conf" "$REPO_DIR/sweep.conf"; do
+      if [[ -f "$_c" ]]; then SWEEP_CONF="$_c"; break; fi
+    done
+  fi
+  if [[ -n "$SWEEP_CONF" ]]; then
+    # shellcheck disable=SC1090
+    source "$SWEEP_CONF"
+    SWEEP_CONF_LOADED="$SWEEP_CONF"
+  fi
 fi
+
+# REPO_DIR 由来のパスは conf を読んだ**後**に確定させる。
+# (conf で REPO_DIR だけ書き換えたときに、他のパスが古い REPO_DIR を指さないように)
+: "${LLMBENCH:=$REPO_DIR/.venv/bin/llmbench}"
+: "${CONFIG:=$REPO_DIR/config.yaml}"
+: "${TASKS_DIR:=$REPO_DIR/tasks}"
+: "${OUT_ROOT:=$REPO_DIR/_OUTPUTS/sweep}"
+: "${RESULTS_DIR:=$REPO_DIR/results}"
 
 usage() {
   cat <<EOF
 使い方: $SCRIPT_NAME [オプション]
 
-  -c, --conf FILE      追加設定ファイルを読む (plain な VAR=値 で上書き)
+  -c, --conf FILE      設定ファイルを明示指定 (plain な VAR=値 で上書き)
+      --no-conf        設定ファイルを読まない (スクリプト既定値だけで走る)
       --quants LIST    対象量子化 (カンマ/スペース区切り、"auto" 可)
       --suites LIST    実行スイート (例: l7,unc)。指定外は実行しない
       --skip LIST      指定スイートだけ外す (例: l6)
@@ -144,7 +177,14 @@ usage() {
   -l, --list           実行対象を表示して終了
   -h, --help           この表示
 
+設定ファイルは -c 省略時に次の順で探し、最初に見つかったものを読む:
+  1. 環境変数 SWEEP_CONF
+  2. <このスクリプトと同じディレクトリ>/sweep.conf   (= tools/sweep.conf)
+  3. <リポジトリ>/sweep.conf
+
 例:
+  cp tools/sweep.conf.example tools/sweep.conf   # 実パスを書く (git 管理外)
+  $SCRIPT_NAME --list
   $SCRIPT_NAME --quants Q4_K_M,Q6_K --suites l7,unc
   RUNS_L7=5 RUN_CULTURE=0 $SCRIPT_NAME
 EOF
@@ -159,6 +199,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -c|--conf)        shift 2 ;;
     --conf=*)         shift ;;
+    --no-conf)        shift ;;
     --quants)         QUANTS="$2"; shift 2 ;;
     --quants=*)       QUANTS="${1#--quants=}"; shift ;;
     --suites)         CLI_SUITES="$2"; shift 2 ;;
@@ -532,10 +573,12 @@ QUANT_LIST=("${QUANT_LIST[@]:-}"); SUITE_LIST=("${SUITE_LIST[@]:-}")
 [[ -n "${SUITE_LIST[0]:-}" ]] || die "対象のスイートが0件 (RUN_* が全部0か --suites が空)"
 
 if [[ "$DO_LIST" == "1" ]]; then
+  echo "設定ファイル: ${SWEEP_CONF_LOADED:-(読み込みなし — スクリプト既定値)}"
   echo "REPO_DIR  : $REPO_DIR"
   echo "LLMBENCH  : $LLMBENCH"
   echo "CONFIG    : $CONFIG"
   echo "OUT_ROOT  : $OUT_ROOT"
+  echo "RESULTS   : $RESULTS_DIR"
   echo "MODEL_DIR : $MODEL_DIR"
   echo "量子化    : ${QUANT_LIST[*]}"
   echo "スイート  :"
@@ -568,6 +611,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 info "════════ llmbench sweep $RUN_ID ════════"
+log "設定     : ${SWEEP_CONF_LOADED:-(読み込みなし — スクリプト既定値)}"
 log "量子化   : ${QUANT_LIST[*]}"
 log "スイート : ${SUITE_LIST[*]}"
 log "ログ     : $LOG_DIR"

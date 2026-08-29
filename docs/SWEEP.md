@@ -16,16 +16,31 @@ for 量子化 in Q4_K_M Q6_K Q8_0:
 
 ```bash
 chmod +x tools/sweep.sh
-cp tools/sweep.conf.example sweep.conf   # パスを自分の環境に直す
-tools/sweep.sh -c sweep.conf --list      # まず対象を確認
-tools/sweep.sh -c sweep.conf --dry-run   # コマンドだけ見る
-tools/sweep.sh -c sweep.conf             # 本番
+cp tools/sweep.conf.example tools/sweep.conf   # 自分の環境のパスを書く
+tools/sweep.sh --list                          # まず対象を確認
+tools/sweep.sh --dry-run                       # コマンドだけ見る
+tools/sweep.sh                                 # 本番
 ```
 
+`tools/sweep.conf` は `-c` を付けなくても自動で読まれます（`.gitignore` 済みなので、
+個人の絶対パスを書いて構いません）。`-c` 省略時の探索順は次のとおり。
+
+| 順 | 探す場所 |
+|---|---|
+| 1 | 環境変数 `SWEEP_CONF` |
+| 2 | `tools/sweep.conf`（= スクリプトと同じディレクトリ） |
+| 3 | `<リポジトリ>/sweep.conf` |
+
+`-c FILE` で明示すればそれが最優先、`--no-conf` を付ければ何も読まずスクリプトの
+既定値だけで走ります。どの設定を読んだかは `--list` と実行開始時のログに出ます。
+
 `REPO_DIR` の既定は「スクリプトの1つ上のディレクトリ」なので、`tools/` に置いたままなら
-clone 先を問わず書き換え不要です。`sweep.sh` 冒頭にも同じ設定が全部入っているので、
-`sweep.conf` を使わず**スクリプトを直接書き換えても**動きます。
-優先順位は **CLI > `sweep.conf` > 環境変数 > スクリプト冒頭の既定値**。
+clone 先を問わず書き換え不要です。`LLMBENCH` / `CONFIG` / `TASKS_DIR` / `OUT_ROOT` /
+`RESULTS_DIR` は conf を読んだ後に `REPO_DIR` から導出されるので、conf で `REPO_DIR` だけ
+書き換えれば残りも追随します（個別に別の場所を指したいときだけ、その変数を書く）。
+
+`sweep.sh` 冒頭にも同じ設定が全部入っているので、conf を使わず**スクリプトを直接
+書き換えても**動きます。優先順位は **CLI > conf > 環境変数 > スクリプト冒頭の既定値**。
 
 ---
 
@@ -155,7 +170,8 @@ seed には触りません。
 ## 7. オプション一覧
 
 ```
--c, --conf FILE      追加設定ファイル
+-c, --conf FILE      設定ファイルを明示指定 (省略時は tools/sweep.conf を自動で読む)
+    --no-conf        設定ファイルを読まない (スクリプト既定値だけで走る)
     --quants LIST    対象量子化 (カンマ/スペース区切り、"auto" 可)
     --suites LIST    実行スイート (例: l7,unc)。指定外は実行しない
     --skip LIST      指定スイートだけ外す

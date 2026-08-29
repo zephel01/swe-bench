@@ -1055,11 +1055,11 @@ llmbench certify --merge results/<stamp1>_<model>_results.json \
 
 ```bash
 chmod +x tools/sweep.sh
-cp tools/sweep.conf.example sweep.conf   # パスを自分の環境に直す
+cp tools/sweep.conf.example tools/sweep.conf   # 自分の環境のパスを書く (.gitignore 済み)
 
-tools/sweep.sh -c sweep.conf --list      # 対象 (量子化 × スイート) を確認
-tools/sweep.sh -c sweep.conf --dry-run   # 発行されるコマンドだけ見る
-tools/sweep.sh -c sweep.conf             # 本番
+tools/sweep.sh --list      # 対象 (量子化 × スイート) を確認
+tools/sweep.sh --dry-run   # 発行されるコマンドだけ見る
+tools/sweep.sh             # 本番
 
 # 一部だけ回す
 tools/sweep.sh --quants Q4_K_M,Q6_K --suites l7,unc
@@ -1079,6 +1079,9 @@ RUN_CULTURE=0 RUNS_L7=5 tools/sweep.sh
 どれでも指定できます。結果は `--label <量子化>-<スイート>` が付いた `results.json` として
 残り、実際にロードされたモデルと `n_ctx` は `_OUTPUTS/sweep/manifest_<実行ID>.tsv` に
 記録されます（推論条件が揃っているかは、比較レポートを書く前にここで確認してください）。
+
+`tools/sweep.conf` は `-c` を付けなくても自動で読まれます（探索順は
+`$SWEEP_CONF` → `tools/sweep.conf` → `<リポジトリ>/sweep.conf`。`--no-conf` で無効化）。
 
 途中で落ちても `--resume`（既定）で続きから再開でき、Ctrl-C されても `llama-server` は
 必ず停止します。

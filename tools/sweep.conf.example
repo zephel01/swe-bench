@@ -1,6 +1,13 @@
 # =============================================================================
-#  sweep.sh 用の追加設定ファイル (例)
-#    使い方:  ./sweep.sh -c sweep.conf
+#  sweep.sh の設定ファイル (例)
+#
+#    cp tools/sweep.conf.example tools/sweep.conf   # ← ここに実パスを書く
+#    tools/sweep.sh --list                          # -c は不要 (自動で読む)
+#
+#    tools/sweep.conf は .gitignore 済み。個人の絶対パスを書いてよい。
+#    -c 省略時の探索順:  $SWEEP_CONF > tools/sweep.conf > <リポジトリ>/sweep.conf
+#    --no-conf を付けると読まない。
+#
 #    sweep.sh 冒頭の既定値を **plain な代入で上書き** する。
 #    ここに書いた値より CLI オプション (--quants 等) の方が優先される。
 # =============================================================================
@@ -8,8 +15,10 @@
 # ── 環境 ─────────────────────────────────────────────────────────────────
 #   REPO_DIR の既定は「sweep.sh の1つ上のディレクトリ」。tools/sweep.sh として
 #   置いている限り指定不要。リポジトリ外から呼ぶときだけ有効にする。
+#   LLMBENCH / CONFIG / TASKS_DIR / OUT_ROOT / RESULTS_DIR は REPO_DIR から
+#   自動で導出されるので、別の場所を指したいときだけ書く。
 # REPO_DIR="$HOME/path/to/swe-bench"
-LLMBENCH="$REPO_DIR/.venv/bin/llmbench"
+# LLMBENCH="$REPO_DIR/.venv/bin/llmbench"
 MODEL_DIR=/llm/models/Qwen3.8-27B-GGUF
 MODEL_PREFIX=Qwen3.8-27B
 LLAMA_SERVER=/usr/local/bin/llama-server
