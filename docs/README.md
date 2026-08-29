@@ -22,6 +22,7 @@
 | 過剰拒否 (over-refusal) を測りたい | [../README.md](../README.md#-過剰拒否-ベンチ-uncensored) / [DESIGN_UNCENSORED.md](DESIGN_UNCENSORED.md) / [TASKS.md](TASKS.md) |
 | `--ctx-size` や量子化の選び方を決めたい | [GGUF_PROBE.md](GGUF_PROBE.md) |
 | GPU を回す前に「この量子化は載るか」を知りたい | [GGUF_PROBE.md](GGUF_PROBE.md)「実用的な使い方」 |
+| 量子化を切り替えて総当たりで測りたい | [SWEEP.md](SWEEP.md) |
 | いつ何が変わったか調べたい | [CHANGES.md](CHANGES.md) |
 
 ---
@@ -64,6 +65,12 @@ GGUF を読むだけで `--ctx-size` の上限・KV キャッシュの VRAM・
 `gguf_probe.py` が読み、`gguf_plan.py` が VRAM 予算から
 `llama-server` の起動コマンドと `config.yaml` を出します。
 場面別の使い方（量子化を絞る／ctx を決める／ctx が足りないとき）も載せています。
+
+### 🔁 [SWEEP.md](SWEEP.md) — 量子化スイープ (`tools/sweep.sh`)
+
+`llama-server` の起動 → `llmbench run` → 停止 を量子化ごとに繰り返すバッチの使い方。
+どのスイート (l6 / l7 / culture / unc) を何 runs で回すか、量子化ごとの起動引数の上書き、
+resume と出力の見方。**同じモデルの量子化を横断で測るとき**はここ。
 
 ### 📝 [CHANGES.md](CHANGES.md) — 変更履歴
 

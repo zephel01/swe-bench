@@ -508,6 +508,10 @@ swe-bench/
 │                       #    + tasks_culture.jsonl (日本ネットミーム 24問, --with-culture/--only-culture)
 │                       #    + tasks_unc.jsonl (uncensored 過剰拒否検査 12問, --with-unc/--only-unc)
 ├── tests/              # ✅ pytestユニットテスト (certify --merge / cli_agent / 接続 / 台帳ロード)
+├── tools/              # 🔁 補助スクリプト
+│   ├── sweep.sh        #    量子化 × スイートの総当たり実行 (llama-server 起動〜停止まで)
+│   ├── sweep.conf.example #  その設定例
+│   └── make_variants.py #   タスク摂動変種の生成
 ├── docs/               # 📚 ドキュメント一式。索引は docs/README.md
 │   ├── USAGE.md        #    📘 実行手順と結果の読み解き方
 │   ├── MANUAL.md       #    🛠️ 出力仕様・内部実装・運用
@@ -515,6 +519,7 @@ swe-bench/
 │   ├── DESIGN_DOMAINS.md #  📐 マルチドメイン拡張の設計仕様
 │   ├── DESIGN_UNCENSORED.md # 📐 過剰拒否 (over-refusal) ドメインの設計仕様
 │   ├── GGUF_PROBE.md   #    🔍 gguf_probe / gguf_plan の使い方と読み方
+│   ├── SWEEP.md        #    🔁 量子化スイープ (tools/sweep.sh) の使い方
 │   └── CHANGES.md      #    📝 変更履歴
 ├── gguf_probe.py       # 🔍 GGUFを読む (--ctx-size上限 / KV VRAM / draft-mtp の可否)
 ├── gguf_plan.py        # 🔍 読んだ結果を起動コマンドと config.yaml に落とす
