@@ -42,12 +42,16 @@ SUITE_ORDER="l6 l7 culture unc"
 #     モデル + KV が VRAM に収まらなければ llama.cpp は一部の層を CPU に置き、
 #     生成が数十倍遅くなる (ログには何も出ない)。
 #
-#     RTX 5090 32GB / Qwen3.8-27B の目安:
-#       Q4_K_M (18GB) + ctx 65536 の KV(f16) ≒ 12GB  → 合計 30GB 超でぎりぎり
-#         → KV_TYPE=q8_0 で KV を半分にするか、CTX=32768 に落とす
-#       Q6_K (23GB) 以上は ctx 65536 だと確実に載らない → OVERRIDE_* で個別に下げる
+#     ただし **KV の大きさはモデルの構造で桁が変わる**。層数から推測しないこと。
+#     Qwen3.8-27B は 65層のうち 17層だけがフルAttention (残り48層は線形注意) で、
+#     KV は 68 KB/token しかない。ctx 65536 でも 4.25GiB。
+#       python gguf_probe.py <gguf>   # 「KVキャッシュ: N/M 層が保持 = X KB/token」
 #
-#     正確な値は gguf_probe / gguf_plan で出せる (docs/GGUF_PROBE.md):
+#     RTX 5090 32GB / Qwen3.8-27B-Uncensored / ctx 65536 / KV f16 / MTP ありの実測:
+#       Q4_K_M  21,210 MiB    Q6_K  26,258 MiB   (32,607 MiB 中)
+#     → この構成では ctx を削る必要も KV を量子化する必要もない。
+#
+#     VRAM 予算から詰めるときは gguf_probe / gguf_plan (docs/GGUF_PROBE.md):
 #       python gguf_probe.py --json --out gguf.json /llm/models/Qwen3.8-27B-GGUF/*.gguf
 #       python gguf_plan.py gguf.json --vram 31 --pick Q4_K_M
 #
@@ -67,12 +71,19 @@ SUITE_ORDER="l6 l7 culture unc"
 
 NGL=99
 FLASH_ATTN=on                       # KV を量子化するなら on 必須
-CTX=32768                           # 32GB 1枚なら 65536 より安全
-KV_TYPE=q8_0                        # -ctk/-ctv q8_0。KV が半分になる
+CTX=65536
+KV_TYPE=                            # 空 = f16。VRAM が足りないときだけ q8_0 にする
 PARALLEL=1
 BATCH=2048
 UBATCH=512
-# SERVER_EXTRA_ARGS="--spec-type draft-mtp"
+
+#  ⚠️ MTP (投機デコード) は必ず確認すること。効くファイルで付けないのは丸損。
+#     gguf_probe が「MTP/nextn テンソル: N 本」と出せば N>0 で使える。
+#     検証付きなので **出力は変わらず速度だけ上がる**。
+#     実測 (RTX 5090 / Qwen3.8-27B-Uncensored-Q4_K_M / ctx 65536 / KV f16):
+#         MTP なし  74.6 tok/s  →  MTP あり  136.3 tok/s   (1.84倍)
+#     VRAM は draft 分で +1GB 程度。
+SERVER_EXTRA_ARGS="--spec-type draft-mtp"
 
 # ── 大きい量子化だけ条件を落とす (共通引数の後ろに付くので後勝ち) ────────
 #   ⚠️ ctx やデバイスを量子化ごとに変えると比較条件が揃わなくなる。まず全量子化が

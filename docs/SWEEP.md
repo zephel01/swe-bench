@@ -123,9 +123,25 @@ llama-server -m <gguf> --host 127.0.0.1 --port 8085 \
 
 > ⚠️ **`-ngl 99` を付けていても、モデル + KV が VRAM に収まらなければ llama.cpp は
 > 一部の層を CPU に置きます。** 生成は数十倍遅くなりますが、ログには何も出ません。
-> 32GB 1枚 + `Qwen3.8-27B-Q4_K_M`（18GB）なら、`--ctx-size 65536` の KV(f16) だけで
-> 約 12GB になり、合計が VRAM を超えます。`KV_TYPE=q8_0` で KV を半分にするか、
-> `CTX=32768` に落としてください。
+
+ただし **KV の大きさはモデルの構造で桁が変わるので、層数から推測してはいけません**。
+`Qwen3.8-27B` は 65層のうち 17層だけがフル Attention（残り 48層は線形注意）で、
+KV は **68 KB/token** しかありません。`--ctx-size 65536` でも 4.25 GiB です。
+
+```bash
+python gguf_probe.py <gguf>   # 「KVキャッシュ: 17/65 層が保持 = 68 KB/token」
+```
+
+RTX 5090 32GB / `Qwen3.8-27B-Uncensored` / ctx 65536 / KV f16 / MTP ありの実測:
+
+| 量子化 | VRAM 使用 | 余裕（32,607 MiB 中） |
+|---|---|---|
+| Q4_K_M | 21,210 MiB | 11.4 GB |
+| Q6_K | 26,258 MiB | 6.3 GB |
+
+llama.cpp は KV を起動時に全確保するので、この値は **ctx を使い切った状態の値**です
+（長いタスクでも増えません）。この構成では ctx を削る必要も KV を量子化する必要も
+ありませんでした。
 
 サーバ起動後、`sweep.sh` は `nvidia-smi` で **全 GPU の VRAM 使用量を合計してログと
 manifest に記録**し、モデルファイルサイズの半分に満たなければ警告します。この警告が
@@ -139,6 +155,27 @@ VRAM 予算から `--ctx-size` と KV 量子化を決める正確な手順は
 python gguf_probe.py --json --out gguf.json /llm/models/Qwen3.8-27B-GGUF/*.gguf
 python gguf_plan.py gguf.json --vram 31 --pick Q4_K_M
 ```
+
+### MTP（投機デコード）— 効くなら必ず付ける
+
+`gguf_probe` が `MTP/nextn テンソル: N 本` と出せば、`N > 0` で
+`--spec-type draft-mtp` が使えます。**検証付きなので出力は変わらず、速度だけ上がります。**
+
+```sh
+SERVER_EXTRA_ARGS="--spec-type draft-mtp"
+```
+
+RTX 5090 / `Qwen3.8-27B-Uncensored-Q4_K_M` / ctx 65536 / KV f16 での実測:
+
+| 条件 | tok/s | VRAM |
+|---|---|---|
+| ctx 32768 / KV q8_0 | 73.7 | 17,164 MiB |
+| ctx 65536 / KV f16 | 74.6 | 20,118 MiB |
+| **+ `--spec-type draft-mtp`** | **136.3** | 21,210 MiB |
+
+KV を q8_0 にしても速度はほぼ変わらず（-1%）、MTP は **1.84倍**でした。付け忘れると
+スイープ全体の所要時間がそのまま倍になります。量子化ごとに MTP の有無が違うと比較条件が
+崩れるので、**全量子化で `gguf_probe` を通してから**有効にしてください。
 
 `--parallel` を上げるときは `CONCURRENCY`（= `llmbench --concurrency`）も同じ値にすること。
 サーバ側とベンチ側で並列数が食い違うと計測条件が揃いません（[USAGE.md](USAGE.md) 8.5章）。
