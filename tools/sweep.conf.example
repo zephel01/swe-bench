@@ -43,8 +43,8 @@ SUITE_ORDER="l6 l7 culture unc"
 #     生成が数十倍遅くなる (ログには何も出ない)。
 #
 #     ただし **KV の大きさはモデルの構造で桁が変わる**。層数から推測しないこと。
-#     Qwen3.8-27B は 65層のうち 17層だけがフルAttention (残り48層は線形注意) で、
-#     KV は 68 KB/token しかない。ctx 65536 でも 4.25GiB。
+#     Qwen3.8-27B は config.json で 64層中16層だけがフルAttention (残り48層は線形注意)。
+#     KV は 68 KB/token しかなく、ctx 65536 でも 4.25GiB (probe の 17/65 は MTP 層込み)。
 #       python gguf_probe.py <gguf>   # 「KVキャッシュ: N/M 層が保持 = X KB/token」
 #
 #     RTX 5090 32GB / Qwen3.8-27B-Uncensored / ctx 65536 / KV f16 / MTP ありの実測:
@@ -79,7 +79,10 @@ UBATCH=512
 
 #  ⚠️ MTP (投機デコード) は必ず確認すること。効くファイルで付けないのは丸損。
 #     gguf_probe が「MTP/nextn テンソル: N 本」と出せば N>0 で使える。
-#     検証付きなので **出力は変わらず速度だけ上がる**。
+#     ⚠️ 「出力は変わらない」とは言えない。保証されるのは出力そのものの同一性ではなく
+#        **出力分布の一致**で、それも数値誤差の範囲内 (llama.cpp は厳密な一致が要るなら
+#        greedy を使えと明記。量子化ターゲットで greedy でも分岐する未解決の報告 #25618 あり)。
+#        → MTP は条件として固定し、manifest に記録する。スコアは runs>1 の平均で見る。
 #     実測 (RTX 5090 / Qwen3.8-27B-Uncensored-Q4_K_M / ctx 65536 / KV f16):
 #         MTP なし  74.6 tok/s  →  MTP あり  136.3 tok/s   (1.84倍)
 #     VRAM は draft 分で +1GB 程度。
@@ -89,7 +92,7 @@ UBATCH=512
 #        llama-server は起動に失敗するが、MTP_AUTO=1 (既定) なら自動で外して
 #        警告し、manifest の mtp 列に yes/no を残す。
 #        → 混在していてもこの行はこのままでよい。ただし mtp 列が混ざったら
-#          tok/s は比較できない (品質スコアは比較できる)。
+#          tok/s は比較できない (品質スコアは runs>1 の平均なら比較できる)。
 SERVER_EXTRA_ARGS="--spec-type draft-mtp"
 
 # ── 大きい量子化だけ条件を落とす (共通引数の後ろに付くので後勝ち) ────────
