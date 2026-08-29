@@ -325,6 +325,7 @@ suite_args() { local u; u="$(varname "$1")"; printf '%s' "$(deref "ARGS_$u")"; }
 # =============================================================================
 SERVER_PID=""
 SERVER_LOG=""
+CURRENT_GGUF=""
 
 # curl は必ず --noproxy を付ける。http_proxy が設定された環境で localhost が
 # プロキシに吸われると、いつまでも /health が通らない (実測で踏む)
@@ -450,7 +451,44 @@ except Exception:
 PY
 )"
   log "  ロード中モデル: ${loaded:-?}  / n_ctx: ${n_ctx:-?}"
-  printf '%s\t%s\t%s\n' "$q" "${loaded:-?}" "${n_ctx:-?}" >> "$OUT_ROOT/manifest_${RUN_ID}.tsv"
+
+  # --- GPU に本当に載ったかを確認する -------------------------------------
+  #   -ngl 99 を付けていても、VRAM が足りなければ llama.cpp は一部の層を
+  #   CPU に置く。生成が数十倍遅くなるが、ログには何も出ない (実測で踏む)。
+  #   モデルファイルの半分も VRAM を使っていなければ警告する。
+  #   GPU は1枚とは限らないので、全 GPU を合計して見る (tensor-split 対応)。
+  local gpu_used=0 gpu_total=0 gpu_lines=""
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    gpu_lines="$(nvidia-smi --query-gpu=index,name,memory.used,memory.total \
+                 --format=csv,noheader,nounits 2>/dev/null || true)"
+    if [[ -n "$gpu_lines" ]]; then
+      local idx name used total
+      while IFS=, read -r idx name used total; do
+        used="$(printf '%s' "$used" | tr -d ' ')"
+        total="$(printf '%s' "$total" | tr -d ' ')"
+        [[ "$used"  =~ ^[0-9]+$ ]] || continue
+        [[ "$total" =~ ^[0-9]+$ ]] || total=0
+        log "  VRAM GPU${idx// /}:$(printf '%s' "$name") ${used}/${total} MiB"
+        gpu_used=$((gpu_used + used)); gpu_total=$((gpu_total + total))
+      done <<< "$gpu_lines"
+      # du はディスク使用量なので使わない (スパースだと 0 になる)。実サイズを見る。
+      local file_bytes file_mib
+      file_bytes="$(stat -c %s "$CURRENT_GGUF" 2>/dev/null || stat -f %z "$CURRENT_GGUF" 2>/dev/null || echo 0)"
+      file_mib=$(( file_bytes / 1048576 ))
+      if (( gpu_used > 0 )); then
+        log "  VRAM 合計: ${gpu_used}/${gpu_total} MiB"
+      fi
+      if [[ -n "$file_mib" ]] && (( gpu_used * 2 < file_mib )); then
+        warn "  ⚠️ VRAM 使用量 (合計 ${gpu_used} MiB) がモデルサイズ (${file_mib} MiB) の半分未満。"
+        warn "     GPU に載り切っていない (= CPU 実行で極端に遅い) 可能性が高い。"
+        warn "     DEVICE / TENSOR_SPLIT の指定、--ctx-size を下げる、KV_TYPE=q8_0 を検討すること。"
+        warn "     ログ: $SERVER_LOG"
+      fi
+    fi
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\n' "$q" "${loaded:-?}" "${n_ctx:-?}" \
+         "${gpu_used:-?}" "${gpu_total:-?}" >> "$OUT_ROOT/manifest_${RUN_ID}.tsv"
 }
 
 # =============================================================================
@@ -520,7 +558,14 @@ run_suite() {  # quant suite -> 0/1, RESULT_PATH に結果 json
     cfg="$CONFIG_MULTIRUN"
   fi
 
-  local cmd=("$LLMBENCH" run --model "$MODEL_KEY" --config "$cfg"
+  # llmbench の進捗 (print) は stdout。tee にパイプすると Python が
+  # ブロックバッファリングに切り替わり、数KB 貯まるまで1行も出ない
+  # (実測: L6 の1タスク目を生成している間ずっと画面が止まって見える)。
+  # PYTHONUNBUFFERED=1 で行ごとに流す。stdbuf があれば併用する。
+  local -a unbuf=(env PYTHONUNBUFFERED=1)
+  if command -v stdbuf >/dev/null 2>&1; then unbuf+=(stdbuf -oL -eL); fi
+
+  local cmd=("${unbuf[@]}" "$LLMBENCH" run --model "$MODEL_KEY" --config "$cfg"
              --tasks-dir "$TASKS_DIR" --output "$RESULTS_DIR"
              --label "$label" --runs "$runs")
   # shellcheck disable=SC2206
@@ -619,7 +664,7 @@ log "ログ     : $LOG_DIR"
 
 prepare_config
 if [[ "$DRY_RUN" != "1" ]]; then
-  printf 'quant\tmodel_id\tn_ctx\n' > "$OUT_ROOT/manifest_${RUN_ID}.tsv"
+  printf 'quant\tmodel_id\tn_ctx\tvram_used_mib\tvram_total_mib\n' > "$OUT_ROOT/manifest_${RUN_ID}.tsv"
   printf 'quant\tsuite\tstatus\tseconds\tresults\n' > "$SUMMARY"
 fi
 
@@ -656,6 +701,7 @@ for q in "${QUANT_LIST[@]}"; do
     done
     [[ "$KEEP_GOING" == "1" ]] && continue || exit 1
   fi
+  CURRENT_GGUF="$gguf"
   log "  gguf: $gguf ($(du -h "$gguf" 2>/dev/null | cut -f1))"
 
   if ! start_server "$q" "$gguf"; then

@@ -37,20 +37,50 @@ RUN_UNC=1;     RUNS_UNC=3          # llmbench run --only-unc     --runs 3
 SUITE_ORDER="l6 l7 culture unc"
 
 # ── llama-server 共通引数 ────────────────────────────────────────────────
+#
+#  ⚠️ ctx と KV は VRAM を見て決めること。-ngl 99 を付けていても、
+#     モデル + KV が VRAM に収まらなければ llama.cpp は一部の層を CPU に置き、
+#     生成が数十倍遅くなる (ログには何も出ない)。
+#
+#     RTX 5090 32GB / Qwen3.8-27B の目安:
+#       Q4_K_M (18GB) + ctx 65536 の KV(f16) ≒ 12GB  → 合計 30GB 超でぎりぎり
+#         → KV_TYPE=q8_0 で KV を半分にするか、CTX=32768 に落とす
+#       Q6_K (23GB) 以上は ctx 65536 だと確実に載らない → OVERRIDE_* で個別に下げる
+#
+#     正確な値は gguf_probe / gguf_plan で出せる (docs/GGUF_PROBE.md):
+#       python gguf_probe.py --json --out gguf.json /llm/models/Qwen3.8-27B-GGUF/*.gguf
+#       python gguf_plan.py gguf.json --vram 31 --pick Q4_K_M
+#
+#     起動後は VRAM 使用量をログと manifest に記録し、モデルサイズの半分に
+#     満たなければ警告する。警告が出たら ctx か KV を下げること。
+#
+#  デバイス指定 (--device)。空なら llama.cpp が見えている全デバイスを使う。
+#  搭載構成に応じて使い分ける。名前は `llama-server --list-devices` で確認:
+#     1枚だけ使う          DEVICE=CUDA0
+#     2枚に分割する        DEVICE=CUDA0,CUDA1  +  TENSOR_SPLIT=0.5,0.5
+#     重い量子化だけ2枚    DEVICE=CUDA0 にしておき、下の OVERRIDE_* で個別に上書き
+#     ROCm / Vulkan        DEVICE=ROCm0 / Vulkan0
+#  ⚠️ 使うデバイスを変えると速度の比較条件が変わる。量子化ごとに変えた場合は
+#     manifest の VRAM 記録と併せてレポートに書くこと。
+# DEVICE=CUDA0
+# TENSOR_SPLIT=0.5,0.5
+
 NGL=99
-FLASH_ATTN=on
-CTX=65536
+FLASH_ATTN=on                       # KV を量子化するなら on 必須
+CTX=32768                           # 32GB 1枚なら 65536 より安全
+KV_TYPE=q8_0                        # -ctk/-ctv q8_0。KV が半分になる
 PARALLEL=1
 BATCH=2048
 UBATCH=512
-# KV_TYPE=q8_0                      # 全量子化で KV を q8_0 にする場合
-# DEVICE=CUDA0
-# TENSOR_SPLIT=0.5,0.5
 # SERVER_EXTRA_ARGS="--spec-type draft-mtp"
 
 # ── 大きい量子化だけ条件を落とす (共通引数の後ろに付くので後勝ち) ────────
-# OVERRIDE_Q6_K="--ctx-size 32768 -ctk q8_0 -ctv q8_0"
-# OVERRIDE_Q8_0="--ctx-size 16384 -ctk q8_0 -ctv q8_0"
+#   ⚠️ ctx やデバイスを量子化ごとに変えると比較条件が揃わなくなる。まず全量子化が
+#      同じ条件で載るかを確認し、載らないものだけ下げて、その旨をレポートに書くこと。
+# OVERRIDE_Q6_K="--ctx-size 16384"
+# OVERRIDE_Q8_0="--ctx-size 8192"
+#   重い量子化だけ2枚に分割する例:
+# OVERRIDE_Q8_0="--device CUDA0,CUDA1 --tensor-split 0.5,0.5"
 
 # ── 挙動 ─────────────────────────────────────────────────────────────────
 HEALTH_TIMEOUT=1200                 # 27B を SSD から読むと数分かかることがある
