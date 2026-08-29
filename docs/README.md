@@ -23,6 +23,9 @@
 | `--ctx-size` や量子化の選び方を決めたい | [GGUF_PROBE.md](GGUF_PROBE.md) |
 | GPU を回す前に「この量子化は載るか」を知りたい | [GGUF_PROBE.md](GGUF_PROBE.md)「実用的な使い方」 |
 | 量子化を切り替えて総当たりで測りたい | [SWEEP.md](SWEEP.md) |
+| モデル追加からレポートまでを一気通貫で回したい | [AUTOMATION.md](AUTOMATION.md) |
+| 長いランを無人で流し、途中で止まっても再開したい | [AUTOMATION.md](AUTOMATION.md) 4章 |
+| 比較条件が揃っているかを確認したい | [AUTOMATION.md](AUTOMATION.md) 5章 |
 | いつ何が変わったか調べたい | [CHANGES.md](CHANGES.md) |
 
 ---
@@ -65,6 +68,14 @@ GGUF を読むだけで `--ctx-size` の上限・KV キャッシュの VRAM・
 `gguf_probe.py` が読み、`gguf_plan.py` が VRAM 予算から
 `llama-server` の起動コマンドと `config.yaml` を出します。
 場面別の使い方（量子化を絞る／ctx を決める／ctx が足りないとき）も載せています。
+
+### 🤖 [AUTOMATION.md](AUTOMATION.md) — 自動化ガイド
+
+新しいモデル / 量子化が来てから比較レポートを出すまでの**順序と判断**。
+gguf を調べる → 条件を実測で決める → `sweep.conf` に固定する → 無人で回す →
+条件が揃っていたかを検証する → `compare` / `certify` でまとめる。
+実運用で踏んだ詰まり方の早見表と、走らせる前のチェックリスト付き。
+**モデルが増えるたびに開くもの**です。
 
 ### 🔁 [SWEEP.md](SWEEP.md) — 量子化スイープ (`tools/sweep.sh`)
 
