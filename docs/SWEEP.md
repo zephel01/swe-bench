@@ -109,9 +109,36 @@ llama-server -m <gguf> --host 127.0.0.1 --port 8085 \
 変数名は `OVERRIDE_<量子化名>`。`.` と `-` は `_` に置換します
 (`UD-Q4_K_XL` → `OVERRIDE_UD_Q4_K_XL`)。
 
-VRAM 予算から `--ctx-size` と KV 量子化を決める手順は
-[GGUF_PROBE.md](GGUF_PROBE.md) を参照してください（`gguf_plan.py` が出す起動コマンドの
+### デバイス指定と VRAM
+
+`DEVICE` は空なら llama.cpp が見えている全デバイスを使います。搭載構成に応じて指定します
+（デバイス名は `llama-server --list-devices` で確認）。
+
+| 構成 | 設定 |
+|---|---|
+| 1枚だけ使う | `DEVICE=CUDA0` |
+| 2枚に分割する | `DEVICE=CUDA0,CUDA1` + `TENSOR_SPLIT=0.5,0.5` |
+| 重い量子化だけ2枚 | `OVERRIDE_Q8_0="--device CUDA0,CUDA1 --tensor-split 0.5,0.5"` |
+| ROCm / Vulkan | `DEVICE=ROCm0` / `DEVICE=Vulkan0` |
+
+> ⚠️ **`-ngl 99` を付けていても、モデル + KV が VRAM に収まらなければ llama.cpp は
+> 一部の層を CPU に置きます。** 生成は数十倍遅くなりますが、ログには何も出ません。
+> 32GB 1枚 + `Qwen3.8-27B-Q4_K_M`（18GB）なら、`--ctx-size 65536` の KV(f16) だけで
+> 約 12GB になり、合計が VRAM を超えます。`KV_TYPE=q8_0` で KV を半分にするか、
+> `CTX=32768` に落としてください。
+
+サーバ起動後、`sweep.sh` は `nvidia-smi` で **全 GPU の VRAM 使用量を合計してログと
+manifest に記録**し、モデルファイルサイズの半分に満たなければ警告します。この警告が
+出たら、そのランは CPU にこぼれていると考えて条件を見直してください。
+
+VRAM 予算から `--ctx-size` と KV 量子化を決める正確な手順は
+[GGUF_PROBE.md](GGUF_PROBE.md) にあります（`gguf_plan.py` が出す起動コマンドの
 値をそのまま `OVERRIDE_*` に写せます）。
+
+```bash
+python gguf_probe.py --json --out gguf.json /llm/models/Qwen3.8-27B-GGUF/*.gguf
+python gguf_plan.py gguf.json --vram 31 --pick Q4_K_M
+```
 
 `--parallel` を上げるときは `CONCURRENCY`（= `llmbench --concurrency`）も同じ値にすること。
 サーバ側とベンチ側で並列数が食い違うと計測条件が揃いません（[USAGE.md](USAGE.md) 8.5章）。
@@ -142,7 +169,7 @@ seed には触りません。
 | ベンチ結果 | `results/<日時>_<量子化>-<スイート>_results.json` / `_report.md`（`--label` で命名） |
 | サーバ/ベンチのログ | `_OUTPUTS/sweep/logs/<実行ID>/<量子化>_{server,l7,unc,…}.log` |
 | 実ロード確認 | `_OUTPUTS/sweep/logs/<実行ID>/<量子化>_props.json` / `_models.json` |
-| 条件の一覧 | `_OUTPUTS/sweep/manifest_<実行ID>.tsv`（量子化 / サーバが返したモデルID / n_ctx） |
+| 条件の一覧 | `_OUTPUTS/sweep/manifest_<実行ID>.tsv`（量子化 / モデルID / n_ctx / VRAM 使用・総量 MiB） |
 | サマリ | `_OUTPUTS/sweep/summary_<実行ID>.tsv` + 標準出力の表 |
 | 進捗（resume用） | `_OUTPUTS/sweep/sweep_state.tsv` |
 
@@ -156,7 +183,35 @@ seed には触りません。
 
 ---
 
-## 6. 途中で落ちたとき
+## 6. 画面が止まって見えるとき
+
+`preflight` の判定が出たあと、しばらく何も表示されないことがあります。多くの場合は
+**止まっていません**。thinking モデルは1タスクに数分〜十数分かけるので、その間は出力が
+ありません（`preflight` は stderr、ベンチの進捗は stdout に出ます）。
+
+生きているかは、ベンチではなく**サーバ側**を見るのが確実です。
+
+```bash
+nvidia-smi                       # 使用率が上がっていれば生成中
+tail -f _OUTPUTS/sweep/logs/<実行ID>/<量子化>_server.log
+curl -s localhost:8085/health    # {"status":"ok"} が返る
+```
+
+**本当に遅い**場合は、まず VRAM を疑ってください。`sweep.sh` が起動直後に出す
+`VRAM 合計: ... MiB` がモデルサイズを大きく下回っていれば、CPU にこぼれています
+（前章「デバイス指定と VRAM」）。`nvidia-smi` の GPU 使用率が低いのに CPU が
+張り付いているときも同じ症状です。
+
+`preflight` の **WARN は続行します**（止まるのは FAIL のときだけ）。`seed` 未指定の
+WARN は、`runs>1` のために意図的に seed を外しているぶんなので想定どおりです。
+
+> 補足: 進捗は `tee` を通すと Python がブロックバッファリングに切り替わって
+> 数KB 貯まるまで表示されません。`sweep.sh` は `PYTHONUNBUFFERED=1` を付けて
+> 行ごとに流すようにしてあります。
+
+---
+
+## 7. 途中で落ちたとき
 
 - 既定は **`--resume`**。`sweep_state.tsv` に `ok` で残っている（量子化, スイート）は飛ばします。
   その量子化が全部済んでいればサーバも起動しません。
@@ -167,7 +222,7 @@ seed には触りません。
 
 ---
 
-## 7. オプション一覧
+## 8. オプション一覧
 
 ```
 -c, --conf FILE      設定ファイルを明示指定 (省略時は tools/sweep.conf を自動で読む)
@@ -192,7 +247,7 @@ seed には触りません。
 
 ---
 
-## 8. 前提
+## 9. 前提
 
 - bash 4以上、`curl`、`python3`（`/props` の読み取りのみ）。`flock` があれば二重起動を防ぎます。
 - `llama-server` の `/health` `/props` `/v1/models` が有効であること。
@@ -204,7 +259,7 @@ seed には触りません。
 
 ---
 
-## 9. 検証状況
+## 10. 検証状況
 
 スタブ環境（`/health` が 503→200 に変わる偽 `llama-server` と、サーバ到達を確認して
 `results.json` を吐く偽 `llmbench`）で、対象解決・通し実行・gguf 不在・サーバ起動失敗・
