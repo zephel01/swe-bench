@@ -145,14 +145,46 @@ python gguf_plan.py gguf.json --vram 31 --pick Q4_K_M
 
 ---
 
-## 4. ⚠️ seed の扱い
+## 4. ⚠️ config の書き換え（seed / max_tokens）
+
+`sweep.sh` は元の `config.yaml` を**読むだけ**で、必要な調整は
+`_OUTPUTS/sweep/config_<量子化>[_noseed].yaml` という一時 config に対して行い、
+それを `llmbench --config` に渡します。どの調整をしたかは実行ログに出ます。
+
+```
+config: config_Q4_K_M_noseed.yaml  [seed 無効化 / max_tokens 49152 → 24576 (ctx 32768)]
+```
+
+### max_tokens を実効 ctx に合わせる
+
+`max_tokens >= n_ctx` だと実効上限が `n_ctx − プロンプト長` になり `max_tokens` が
+効かないため、**preflight が FAIL になって実行できません**。`--ctx-size` を下げたときに
+必ず踏みます（例: `config.yaml` の `max_tokens: 49152` のまま `CTX=32768` にすると FAIL）。
+
+`ADJUST_MAX_TOKENS=1`（既定）なら、量子化ごとの**実効 ctx**（`CTX` を
+`SERVER_EXTRA_ARGS` / `OVERRIDE_*` の `--ctx-size` が後勝ちで上書きした値）から
+`min(ctx の 3/4, MAX_TOKENS_CAP)` を計算し、config の値より小さいときだけ引き下げます。
+`gguf_plan.py` と同じ規則です。
+
+| 設定 | 意味 |
+|---|---|
+| `ADJUST_MAX_TOKENS=0` | 何もしない（config の値をそのまま使う） |
+| `MAX_TOKENS=8192` | 自動計算せずこの値にする |
+| `MAX_TOKENS_CAP=49152` | 自動計算の上限（既定） |
+
+**ctx を上げても max_tokens は勝手に増やしません**（下げる方向のみ）。量子化ごとに
+ctx を変えると max_tokens も変わるので、比較条件が揃わなくなる点に注意してください。
+
+---
+
+## 5. ⚠️ seed の扱い
 
 `config.yaml` の `local-openai` には `seed: 42` が入っています。config 自身のコメントにある通り、
 **`runs > 1` で seed を固定すると全試行が同一条件になり pass@k の前提が崩れます**。
 スイープの既定スイートは全部 `runs 3〜5` なので、次のように扱います。
 
 - `STRIP_SEED_FOR_MULTIRUN=1`（既定）… `runs>1` のスイートだけ、`local-openai` ブロックの
-  `seed:` 行をコメントアウトした一時 config（`_OUTPUTS/sweep/config_noseed.yaml`）を
+  `seed:` 行をコメントアウトした一時 config（`_OUTPUTS/sweep/config_<量子化>_noseed.yaml`）を
   `--config` に渡す。**元の `config.yaml` は読むだけで書き換えません。**
 - `runs=1` のスイートには元の `config.yaml` をそのまま使う。
 - `STRIP_SEED_FOR_MULTIRUN=0` にすれば何もしない。
@@ -162,7 +194,7 @@ seed には触りません。
 
 ---
 
-## 5. 出力
+## 6. 出力
 
 | もの | 場所 |
 |---|---|
@@ -183,7 +215,7 @@ seed には触りません。
 
 ---
 
-## 6. 画面が止まって見えるとき
+## 7. 画面が止まって見えるとき
 
 `preflight` の判定が出たあと、しばらく何も表示されないことがあります。多くの場合は
 **止まっていません**。thinking モデルは1タスクに数分〜十数分かけるので、その間は出力が
@@ -211,7 +243,7 @@ WARN は、`runs>1` のために意図的に seed を外しているぶんなの
 
 ---
 
-## 7. 途中で落ちたとき
+## 8. 途中で落ちたとき
 
 - 既定は **`--resume`**。`sweep_state.tsv` に `ok` で残っている（量子化, スイート）は飛ばします。
   その量子化が全部済んでいればサーバも起動しません。
@@ -222,7 +254,7 @@ WARN は、`runs>1` のために意図的に seed を外しているぶんなの
 
 ---
 
-## 8. オプション一覧
+## 9. オプション一覧
 
 ```
 -c, --conf FILE      設定ファイルを明示指定 (省略時は tools/sweep.conf を自動で読む)
@@ -247,7 +279,7 @@ WARN は、`runs>1` のために意図的に seed を外しているぶんなの
 
 ---
 
-## 9. 前提
+## 10. 前提
 
 - bash 4以上、`curl`、`python3`（`/props` の読み取りのみ）。`flock` があれば二重起動を防ぎます。
 - `llama-server` の `/health` `/props` `/v1/models` が有効であること。
@@ -259,7 +291,7 @@ WARN は、`runs>1` のために意図的に seed を外しているぶんなの
 
 ---
 
-## 10. 検証状況
+## 11. 検証状況
 
 スタブ環境（`/health` が 503→200 に変わる偽 `llama-server` と、サーバ到達を確認して
 `results.json` を吐く偽 `llmbench`）で、対象解決・通し実行・gguf 不在・サーバ起動失敗・
