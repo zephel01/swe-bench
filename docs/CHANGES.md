@@ -1,3 +1,35 @@
+# 🔁 量子化スイープ `tools/sweep.sh` を追加 (2026-08-29)
+
+量子化ごとに `llama-server` を起動 → `llmbench run` → 停止、を手で繰り返していた作業を
+1コマンドにした。**量子化 × スイート**の総当たりを順に流す。
+
+```bash
+tools/sweep.sh --quants Q4_K_M,Q6_K,Q8_0 --suites l6,l7,culture,unc
+```
+
+- スイートは `--with-l6` / `--only-l7` / `--only-culture --lang ja` / `--only-unc` に対応。
+  やる / やらないと runs は `RUN_L6=0` `RUNS_L7=5` のような変数、環境変数、
+  `--suites` / `--skip` / `--runs` のどれでも指定できる
+- 量子化は明示リストと `QUANTS=auto`（`MODEL_DIR` の `*.gguf` を全検出、`QUANT_EXCLUDE` で除外）
+  の両対応。gguf が無い量子化は `no_model` として記録し次へ進む
+- `llama-server` の起動引数は共通テンプレ + `OVERRIDE_<量子化>` の後勝ち上書き。
+  大きい量子化だけ `--ctx-size` を落として `-ctk/-ctv q8_0` にする、といった運用ができる
+- `/health` を待ってから実行し、`/props` `/v1/models` から**実際にロードされたモデルと
+  `n_ctx`** を `manifest_<実行ID>.tsv` に残す。推論条件が揃っているかを後から確認できる
+- 失敗しても止まらない: サーバ起動失敗・スイート異常終了はその場に記録して次へ。
+  `sweep_state.tsv` による resume（既定 ON）、Ctrl-C 時の trap によるサーバ停止つき
+- ⚠️ `config.yaml` の `local-openai` の `seed: 42` は `runs>1` で pass@k の前提を壊すため、
+  `runs>1` のスイートには **seed 行を無効化した一時 config** を渡す。
+  元の `config.yaml` は読むだけで書き換えない
+
+出力は `_OUTPUTS/sweep/`（ログ・manifest・サマリ・state）と、通常どおり `results/` の
+`<日時>_<量子化>-<スイート>_results.json`。実行の最後に、スイートごとの
+`llmbench compare` コマンドを出す。
+
+使い方は [SWEEP.md](SWEEP.md)。
+
+---
+
 # 🔓 uncensored v1.5 — typographic apostrophe の拒否取りこぼし (2026-08-24)
 
 v1.3 で「拒否文に gold 語が漏れても通さない」にしたあと、公式

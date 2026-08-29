@@ -1,0 +1,48 @@
+# =============================================================================
+#  sweep.sh 用の追加設定ファイル (例)
+#    使い方:  ./sweep.sh -c sweep.conf
+#    sweep.sh 冒頭の既定値を **plain な代入で上書き** する。
+#    ここに書いた値より CLI オプション (--quants 等) の方が優先される。
+# =============================================================================
+
+# ── 環境 ─────────────────────────────────────────────────────────────────
+REPO_DIR=/home/zephel01/works/project/swe-bench
+LLMBENCH="$REPO_DIR/.venv/bin/llmbench"
+MODEL_DIR=/llm/models/Qwen3.8-27B-GGUF
+MODEL_PREFIX=Qwen3.8-27B
+LLAMA_SERVER=/usr/local/bin/llama-server
+PORT=8085
+
+# ── 対象量子化 ───────────────────────────────────────────────────────────
+QUANTS="Q4_K_M Q5_K_M Q6_K"
+# QUANTS=auto                       # MODEL_DIR の *.gguf を全部
+# QUANT_EXCLUDE='UD-'               # auto のとき UD- 系を除外
+
+# ── どのスイートをやるか / runs ──────────────────────────────────────────
+RUN_L6=1;      RUNS_L6=5           # llmbench run --with-l6      --runs 5
+RUN_L7=1;      RUNS_L7=3           # llmbench run --only-l7      --runs 3
+RUN_CULTURE=1; RUNS_CULTURE=3      # llmbench run --only-culture --lang ja --runs 3
+RUN_UNC=1;     RUNS_UNC=3          # llmbench run --only-unc     --runs 3
+SUITE_ORDER="l6 l7 culture unc"
+
+# ── llama-server 共通引数 ────────────────────────────────────────────────
+NGL=99
+FLASH_ATTN=on
+CTX=65536
+PARALLEL=1
+BATCH=2048
+UBATCH=512
+# KV_TYPE=q8_0                      # 全量子化で KV を q8_0 にする場合
+# DEVICE=CUDA0
+# TENSOR_SPLIT=0.5,0.5
+# SERVER_EXTRA_ARGS="--spec-type draft-mtp"
+
+# ── 大きい量子化だけ条件を落とす (共通引数の後ろに付くので後勝ち) ────────
+# OVERRIDE_Q6_K="--ctx-size 32768 -ctk q8_0 -ctv q8_0"
+# OVERRIDE_Q8_0="--ctx-size 16384 -ctk q8_0 -ctv q8_0"
+
+# ── 挙動 ─────────────────────────────────────────────────────────────────
+HEALTH_TIMEOUT=1200                 # 27B を SSD から読むと数分かかることがある
+VRAM_SETTLE=15
+# SUITE_TIMEOUT=21600               # 1スイート6時間で打ち切る
+# SKIP_PREFLIGHT=1

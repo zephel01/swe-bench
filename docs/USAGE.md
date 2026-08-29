@@ -29,6 +29,7 @@
 15. [トラブルシューティング](#15-トラブルシューティング)
 16. [マルチドメイン評価を実行する](#16-マルチドメイン評価を実行する)
 17. [マルチドメイン結果の読み方](#17-マルチドメイン結果の読み方)
+18. [量子化を切り替えて総当たりで測る (`tools/sweep.sh`)](#18-量子化を切り替えて総当たりで測る-toolssweepsh)
 
 ---
 
@@ -1043,3 +1044,48 @@ llmbench certify --merge results/<stamp1>_<model>_results.json \
 > (`llmbench certify --config config.yaml` を指定した場合)。医療の難易度別gateは `DEFAULT_MED_GATES`、
 > ネットミームの種別別gateは `DEFAULT_CUL_GATES`（config は `certify_culture:`）、
 > 過剰拒否の種別別gateは `DEFAULT_UNC_GATES`（config は `certify_uncensored:`）で調整可能。
+
+---
+
+## 18. 量子化を切り替えて総当たりで測る (`tools/sweep.sh`)
+
+同じモデルの量子化を横断で測るとき、手順は毎回同じです ——
+`llama-server` を起動し、`/health` が通るのを待ち、`llmbench run` を必要なぶん回し、
+サーバを落として次の gguf に差し替える。`tools/sweep.sh` はこれを自動で回します。
+
+```bash
+chmod +x tools/sweep.sh
+cp tools/sweep.conf.example sweep.conf   # パスを自分の環境に直す
+
+tools/sweep.sh -c sweep.conf --list      # 対象 (量子化 × スイート) を確認
+tools/sweep.sh -c sweep.conf --dry-run   # 発行されるコマンドだけ見る
+tools/sweep.sh -c sweep.conf             # 本番
+
+# 一部だけ回す
+tools/sweep.sh --quants Q4_K_M,Q6_K --suites l7,unc
+RUN_CULTURE=0 RUNS_L7=5 tools/sweep.sh
+```
+
+スイートは `llmbench run` の台帳フラグに対応します。
+
+| スイート | 展開されるコマンド | 既定 runs |
+|---|---|---|
+| `l6` | `llmbench run --model local-openai --with-l6` | 5 |
+| `l7` | `llmbench run --model local-openai --only-l7` | 3 |
+| `culture` | `llmbench run --model local-openai --only-culture --lang ja` | 3 |
+| `unc` | `llmbench run --model local-openai --only-unc` | 3 |
+
+やる / やらないは `RUN_L6=0` のような ON/OFF、環境変数、`--suites` / `--skip` の
+どれでも指定できます。結果は `--label <量子化>-<スイート>` が付いた `results.json` として
+残り、実際にロードされたモデルと `n_ctx` は `_OUTPUTS/sweep/manifest_<実行ID>.tsv` に
+記録されます（推論条件が揃っているかは、比較レポートを書く前にここで確認してください）。
+
+途中で落ちても `--resume`（既定）で続きから再開でき、Ctrl-C されても `llama-server` は
+必ず停止します。
+
+> `config.yaml` の `local-openai` には `seed: 42` があり、`runs > 1` では pass@k の前提が
+> 崩れます。`sweep.sh` は `runs>1` のスイートに限り seed 行を無効化した一時 config を
+> 使います（元の `config.yaml` は書き換えません）。
+
+詳細は [SWEEP.md](SWEEP.md)。VRAM 予算から `--ctx-size` と KV 量子化を決める手順は
+[GGUF_PROBE.md](GGUF_PROBE.md) です。
