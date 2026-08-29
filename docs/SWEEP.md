@@ -125,8 +125,10 @@ llama-server -m <gguf> --host 127.0.0.1 --port 8085 \
 > 一部の層を CPU に置きます。** 生成は数十倍遅くなりますが、ログには何も出ません。
 
 ただし **KV の大きさはモデルの構造で桁が変わるので、層数から推測してはいけません**。
-`Qwen3.8-27B` は 65層のうち 17層だけがフル Attention（残り 48層は線形注意）で、
-KV は **68 KB/token** しかありません。`--ctx-size 65536` でも 4.25 GiB です。
+`Qwen3.8-27B` は公式の `config.json` で `num_hidden_layers: 64` / `full_attention_interval: 4`、
+つまり **64層のうち 16層だけがフル Attention**（残り 48層は線形注意）で、そこに MTP ヘッドが
+1層乗ります。KV は **68 KB/token** しかなく、`--ctx-size 65536` でも 4.25 GiB です
+（`gguf_probe` の「17/65」は MTP ブロックを1層と数えた値）。
 
 ```bash
 python gguf_probe.py <gguf>   # 「KVキャッシュ: 17/65 層が保持 = 68 KB/token」
@@ -159,7 +161,19 @@ python gguf_plan.py gguf.json --vram 31 --pick Q4_K_M
 ### MTP（投機デコード）— 効くなら必ず付ける
 
 `gguf_probe` が `MTP/nextn テンソル: N 本` と出せば、`N > 0` で
-`--spec-type draft-mtp` が使えます。**検証付きなので出力は変わらず、速度だけ上がります。**
+`--spec-type draft-mtp` が使えます。
+
+> [!IMPORTANT]
+> **「出力は変わらない」とは言えません。** 投機デコードが保証するのは出力そのものの同一性
+> ではなく**出力分布の一致**で、それも数値誤差の範囲内です（Chen et al., arXiv:2302.01318 は
+> "we cannot not expect identical outputs" と明記）。llama.cpp 公式の `docs/speculative.md` も
+> 「厳密に出力を一致させたいなら greedy サンプリングを使え」と書いています。さらに
+> **量子化したターゲットでは greedy でも非投機実行と出力が分岐する**という未解決の報告
+> （llama.cpp Issue #25618, 2026-07-13 起票 / `bug-unconfirmed`）があります。
+>
+> したがって MTP は「付けても付けなくても同じ」ではなく、**条件として固定し記録するもの**
+> です。スコアは十分な試行数の平均で見てください（`--runs N`）。厳密な A/B が要るなら
+> temperature 0 + 投機デコード off + seed 固定が最も再現性が高くなります。
 
 ```sh
 SERVER_EXTRA_ARGS="--spec-type draft-mtp"
@@ -197,8 +211,9 @@ python も不要。先頭 32 MiB だけ読むので18GBのファイルでも一�
 ```
 
 どちらで走ったかは `manifest_<実行ID>.tsv` の **`mtp` 列**（`yes` / `no` / `-`）に残ります。
-**MTP の有無が混ざると tok/s は比較できません**（品質スコアは投機デコードでも変わらないので
-比較できます）。レポートを書く前に必ずこの列を確認してください。
+**MTP の有無が混ざると tok/s は比較できません**。品質スコアのほうは、投機デコードでも
+出力分布は保たれるので**十分な試行数の平均であれば**比較できます（1回のスコア差を MTP の
+有無に帰属させることはできません）。レポートを書く前に必ずこの列を確認してください。
 
 `MTP_AUTO=0` にすると判定せず、指定した引数をそのまま渡します（従来動作）。
 

@@ -15,7 +15,9 @@
 2. [まず自己検証する (`validate`)](#2-まず自己検証する-validate)
 3. [モデルを設定する (`config.yaml` / `model: auto`)](#3-モデルを設定する-configyaml--model-auto)
     - [3.5 サブスクCLIで実行する (`type: cli`)](#35-サブスクcliで実行する-type-cli--claude--codex--grok-の定額枠)
+    - [3.6 思考の暴走で止まるとき (thinking モデル)](#36-思考の暴走で止まるとき-thinking-モデル)
 4. [モデルを選ぶ (`models` / Ollama動的選択)](#4-モデルを選ぶ-models--ollama動的選択)
+    - [4.5 接続先の指定 (config編集なしで切替)](#45-接続先の指定-config編集なしで切替)
 5. [ベンチマーク実行 (`run`)](#5-ベンチマーク実行-run)
 6. [信頼性を測る (`--runs` / pass@k)](#6-信頼性を測る---runs--passk)
 7. [usability判定の読み方](#7-usability判定の読み方)
@@ -167,6 +169,59 @@ llmbench run --model codex-sub --runs 1
 
 ---
 
+## 3.6 思考の暴走で止まるとき (thinking モデル)
+
+思考モデルは難タスクで**縮退ループ**に落ちることがあります。`content` が空のまま
+`reasoning_content` だけが伸び続け、`max_tokens` に張り付いたまま終わらない状態です。
+
+実測 (Qwen3.8-9B-Q6_K / `--with-l6 --runs 5`) では t033 で
+
+- 思考 179,320 文字 / `completion_tokens` = 49,152 (= `max_tokens` 到達) を毎回繰り返す
+- 1試行 ≒ 150秒 × 再生成1回 × 5 runs = **1タスクで最大25分**
+
+となり、ランが「止まった」ように見えていました。対策は2段構えです。
+
+**① クライアント側 — 反復を検出して接続を切る** (`models.<name>`):
+
+```yaml
+    stream: true              # 必須。非ストリームでは途中で切れない
+    loop_guard: true          # 反復を検出したら即打ち切り (既定 true)
+    reasoning_max_tokens: 16384   # 思考そのものの上限 (null = 無効)
+```
+
+判定は2段構えです。
+
+| 段 | 対象 | しきい値 | 打ち切り後の扱い |
+|---|---|---|---|
+| 本文が出る前 | 思考の反復 / 思考トークン上限 | 8,000 文字 | 思考は捨てる（縮退テキストから抽出できるコードは無い） |
+| 本文が出た後 | 本文の反復 | 16,000 文字 | **本文は捨てない**（縮退より前の正しいブロックを grader に見せる） |
+
+本文側のしきい値は、実測の正答サイズ（t048 で 2,109〜2,449 バイト）の約7倍です。
+正常な答えには絶対に届きません。実測で思考側は 179,320 文字 → **約 8,000 文字**
+で打ち切れます (1試行 150秒 → 約7秒)。
+
+`content` 中の `<think>…</think>` は思考として扱います。llama.cpp の
+`--reasoning-format` 次第では、**非ストリームでは分離されるのにストリームでは
+`content` に流れてくる**ことがあり、そのままだと最初の思考トークンで
+`content` が非空になってガードが1トークン目から無効化されるためです。
+
+**② runner 側 — 残りの試行を省く** (`run.fail_fast`, 既定 `true`):
+
+1回目の試行が **打ち切られた かつ 出力が1文字も無い** ときだけ、残りの `runs` を
+スキップします。途中まで書けていた生成 (予算不足でたまたま切れた) や通信エラーは
+対象外で、従来どおり `runs` 回まわります。
+
+スキップした試行は `success_rate` の分母から外し、`n_skipped` として記録します
+(回していない試行を「失敗」として数えないため)。実行した試行が失敗している以上
+`success_rate` は 0 のままで、`resolved` の判定は変わりません。
+
+> [!NOTE]
+> `--concurrency >1` では `runs` を同時に投げるので fail-fast は効きません
+> (その場合は並列化で壁時計時間が既に縮んでいます)。
+> 素の性能を測る A/B をするときは `loop_guard: false` / `fail_fast: false` に。
+
+---
+
 ## 4. モデルを選ぶ (`models` / Ollama動的選択)
 
 どんなモデルが使えるかは `models` で一覧できます（config定義 + Ollama稼働モデル）。
@@ -185,6 +240,35 @@ llmbench models
 - **Ollamaはconfig未定義でも直接指定可**: `llmbench run --model qwen2.5-coder:7b`。
   起動中のOllamaの `/api/tags` から自動解決します（接続先は `--ollama-host`）。
 - Ollama未起動でも `models` はエラーにならず案内を出します。
+
+---
+
+## 4.5 接続先の指定 (config編集なしで切替)
+
+`--base-url` / `--client-type` で接続先をCLIから直接指定できます:
+
+```bash
+# llama.cpp / vLLM / LM Studio に直結 (config不要)
+llmbench run --model auto --client-type openai --base-url http://localhost:8085/v1
+
+# CodeRouter (multiagent) に直結
+llmbench run --model router --client-type multiagent --base-url http://localhost:8088
+
+# リモートOllama (稼働モデル名をそのまま指定)
+llmbench run --model qwen2.5-coder:32b --base-url http://192.168.1.10:11434
+```
+
+接続先の優先順位:
+
+| 対象 | 優先順 (左が強い) |
+|---|---|
+| base_url | `--base-url` > config `base_url` (`${VAR}` 展開可) > 環境変数 (`OPENAI_BASE_URL` / `OLLAMA_HOST` / `CODEROUTER_BASE_URL`) > 型別デフォルト |
+| モデル名 | `--client-type` 直接指定 > config `models:` キー > Ollama稼働モデル自動解決 |
+| Ollamaホスト | `--ollama-host` > env `OLLAMA_HOST` > config ollamaモデルの `base_url` > `http://localhost:11434` |
+
+> [!NOTE]
+> `${VAR}` 参照の環境変数が未設定の場合は明確なエラーになります(空文字での分かりにくい401を防止)。
+> 通信断など一時的なエラーは既定 `transient_retries: 2` 回まで自動リトライします(モデルごとに `models:` の各エントリで上書き可)。
 
 ---
 
