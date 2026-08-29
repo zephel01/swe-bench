@@ -96,6 +96,15 @@ SUITE_TIMEOUT="${SUITE_TIMEOUT:-0}"      # 1スイートの上限(秒)。0=無�
 STRIP_SEED_FOR_MULTIRUN="${STRIP_SEED_FOR_MULTIRUN:-1}"
                                          # runs>1 のとき seed 行を無効化した一時
                                          # config を使う (元の config.yaml は触らない)
+ADJUST_MAX_TOKENS="${ADJUST_MAX_TOKENS:-1}"
+                                         # 1 で config の max_tokens を実効 ctx に
+                                         # 合わせて下げる。max_tokens >= n_ctx は
+                                         # preflight が FAIL にする (実効上限が
+                                         # n_ctx − プロンプト長になり効かないため)
+MAX_TOKENS="${MAX_TOKENS:-}"             # 空=自動 (実効 ctx の 3/4、上限は下の CAP)
+MAX_TOKENS_CAP="${MAX_TOKENS_CAP:-49152}"  # thinking モデルでもこれ以上は要らない実測値
+                                         # ※ 元の値より小さくするときだけ書き換える
+                                         #   (ctx を上げても max_tokens は勝手に増やさない)
 SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-0}"    # 1 で llmbench の preflight を省略
 RESUME="${RESUME:-1}"                    # 1 で完了済み(quant,suite)をスキップ
 DRY_RUN="${DRY_RUN:-0}"                  # 1 でコマンド表示のみ
@@ -287,9 +296,9 @@ gguf_path() {
   if [[ -f "$p" ]]; then printf '%s' "$p"; return 0; fi
   p="$MODEL_DIR/${q}.gguf"
   if [[ -f "$p" ]]; then printf '%s' "$p"; return 0; fi
-  p="$(find "$MODEL_DIR" -maxdepth 1 -name "*${q}*-00001-of-*.gguf" | sort | head -1)"
+  p="$(find "$MODEL_DIR" -maxdepth 1 -name "*${q}*-00001-of-*.gguf" 2>/dev/null | sort | head -1)"
   if [[ -n "$p" ]]; then printf '%s' "$p"; return 0; fi
-  p="$(find "$MODEL_DIR" -maxdepth 1 -name "*${q}*.gguf" | sort | head -1)"
+  p="$(find "$MODEL_DIR" -maxdepth 1 -name "*${q}*.gguf" 2>/dev/null | sort | head -1)"
   if [[ -n "$p" ]]; then printf '%s' "$p"; return 0; fi
   return 1
 }
@@ -494,33 +503,84 @@ PY
 # =============================================================================
 #  config (seed 無効化)
 # =============================================================================
-CONFIG_MULTIRUN="$CONFIG"
+# 量子化ごとの実効 ctx (共通 CTX を SERVER_EXTRA_ARGS / OVERRIDE_* が後勝ちで上書き)
+effective_ctx() {
+  local q="$1" ctx="$CTX" tok prev="" s
+  s="$SERVER_EXTRA_ARGS $(deref "OVERRIDE_$(varname "$q")")"
+  for tok in $s; do
+    case "$prev" in
+      --ctx-size|-c) [[ "$tok" =~ ^[0-9]+$ ]] && ctx="$tok" ;;
+    esac
+    prev="$tok"
+  done
+  printf '%s' "$ctx"
+}
 
-prepare_config() {
-  [[ "$STRIP_SEED_FOR_MULTIRUN" == "1" ]] || return 0
-  [[ -f "$CONFIG" ]] || die "config が無い: $CONFIG"
-  local out="$OUT_ROOT/config_noseed.yaml"
+# config に書かれている max_tokens (MODEL_KEY のブロック内) を読む
+config_max_tokens() {
   awk -v key="$MODEL_KEY" '
-    BEGIN { inblk = 0; hit = 0 }
-    /^[^[:space:]#]/           { inblk = 0 }
+    /^[^[:space:]#]/                { inblk = 0 }
+    $0 ~ "^  " key ":[[:space:]]*$" { inblk = 1; next }
+    inblk && /^  [A-Za-z0-9_.\-]+:[[:space:]]*$/ { inblk = 0 }
+    inblk && match($0, /^[[:space:]]*max_tokens:[[:space:]]*[0-9]+/) {
+      s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); print s; exit
+    }
+  ' "$CONFIG"
+}
+
+# 実効 ctx に対して安全な max_tokens。gguf_plan.py と同じ規則:
+#   min(ctx の 3/4 を 1024 単位に切り下げ, MAX_TOKENS_CAP)
+auto_max_tokens() {
+  local ctx="$1" tq=$(( $1 * 3 / 4 / 1024 * 1024 ))
+  if (( tq <= MAX_TOKENS_CAP )); then printf '%s' "$tq"; else printf '%s' "$MAX_TOKENS_CAP"; fi
+}
+
+# 量子化 × (seed を落とすか) ごとに一時 config を作る。元の config.yaml は読むだけ。
+CONFIG_NOTE=""
+CONFIG_PATH=""
+config_for() {   # 結果は CONFIG_PATH / CONFIG_NOTE に入れる (サブシェルにしない)
+  local q="$1" runs="$2"
+  local strip=0 ctx mt cur out tag
+  CONFIG_NOTE=""
+  [[ -f "$CONFIG" ]] || die "config が無い: $CONFIG"
+
+  if [[ "$STRIP_SEED_FOR_MULTIRUN" == "1" && "${runs:-1}" -gt 1 ]]; then strip=1; fi
+
+  mt=""
+  if [[ "$ADJUST_MAX_TOKENS" == "1" ]]; then
+    ctx="$(effective_ctx "$q")"
+    if [[ -n "$MAX_TOKENS" ]]; then mt="$MAX_TOKENS"; else mt="$(auto_max_tokens "$ctx")"; fi
+    cur="$(config_max_tokens)"
+    # 元の値より小さくするときだけ書き換える (ctx を上げても勝手に増やさない)
+    if [[ -n "$cur" ]] && (( cur <= mt )); then mt=""; fi
+  fi
+
+  if (( strip == 0 )) && [[ -z "$mt" ]]; then
+    CONFIG_PATH="$CONFIG"; return 0
+  fi
+
+  tag="$(varname "$q")"; (( strip )) && tag="${tag}_noseed"
+  out="$OUT_ROOT/config_${tag}.yaml"
+  awk -v key="$MODEL_KEY" -v strip="$strip" -v mt="$mt" '
+    /^[^[:space:]#]/                { inblk = 0 }
     $0 ~ "^  " key ":[[:space:]]*$" { inblk = 1; print; next }
     inblk && /^  [A-Za-z0-9_.\-]+:[[:space:]]*$/ { inblk = 0 }
-    inblk && /^[[:space:]]*seed:/ {
-      print "#" $0 "   # sweep.sh: runs>1 のため無効化"
-      hit = 1; next
+    inblk && strip == 1 && /^[[:space:]]*seed:/ {
+      print "#" $0 "   # sweep.sh: runs>1 のため無効化"; next
+    }
+    inblk && mt != "" && match($0, /^[[:space:]]*max_tokens:[[:space:]]*[0-9]+/) {
+      indent = $0; sub(/[^[:space:]].*$/, "", indent)
+      print indent "max_tokens: " mt "   # sweep.sh: 実効 ctx に合わせて引き下げ"
+      next
     }
     { print }
   ' "$CONFIG" > "$out"
-  if diff -q "$CONFIG" "$out" >/dev/null 2>&1; then
-    log "config: $MODEL_KEY に seed 指定なし → そのまま使う"
-    CONFIG_MULTIRUN="$CONFIG"
-    rm -f "$out"
-  else
-    warn "config: $MODEL_KEY の seed を無効化した一時 config を使う (runs>1 のスイートのみ)"
-    log  "  $out"
-    CONFIG_MULTIRUN="$out"
+
+  if (( strip )); then CONFIG_NOTE="seed 無効化"; fi
+  if [[ -n "$mt" ]]; then
+    CONFIG_NOTE="${CONFIG_NOTE:+$CONFIG_NOTE / }max_tokens ${cur:-?} → $mt (ctx $ctx)"
   fi
-  return 0
+  CONFIG_PATH="$out"
 }
 
 # =============================================================================
@@ -553,9 +613,10 @@ run_suite() {  # quant suite -> 0/1, RESULT_PATH に結果 json
   logf="$LOG_DIR/${q}_${s}.log"
   RESULT_PATH=""
 
-  cfg="$CONFIG"
-  if [[ "$STRIP_SEED_FOR_MULTIRUN" == "1" && "${runs:-1}" -gt 1 ]]; then
-    cfg="$CONFIG_MULTIRUN"
+  config_for "$q" "$runs"
+  cfg="$CONFIG_PATH"
+  if [[ "$cfg" != "$CONFIG" ]]; then
+    log "  config: $(basename "$cfg")  [${CONFIG_NOTE:-一時config}]"
   fi
 
   # llmbench の進捗 (print) は stdout。tee にパイプすると Python が
@@ -598,6 +659,10 @@ run_suite() {  # quant suite -> 0/1, RESULT_PATH に結果 json
     log "  ✅ $q / $s  $(hms "$elapsed")  ${RESULT_PATH:-(結果パス不明)}"
   else
     err "  ❌ $q / $s  rc=$rc  $(hms "$elapsed")  ログ: $logf"
+    if [[ $rc -eq 2 ]] && grep -qa "preflight が FAIL" "$logf" 2>/dev/null; then
+      err "     preflight が FAIL。ログの「B. 実効値の三点照合」を見て config か"
+      err "     起動引数を直すこと (承知の上で走らせるなら SKIP_PREFLIGHT=1)"
+    fi
   fi
   SUITE_ELAPSED=$elapsed
   return $rc
@@ -662,7 +727,7 @@ log "スイート : ${SUITE_LIST[*]}"
 log "ログ     : $LOG_DIR"
 [[ "$DRY_RUN" == "1" ]] && warn "DRY-RUN モード (実行しない)"
 
-prepare_config
+mkdir -p "$OUT_ROOT"
 if [[ "$DRY_RUN" != "1" ]]; then
   printf 'quant\tmodel_id\tn_ctx\tvram_used_mib\tvram_total_mib\n' > "$OUT_ROOT/manifest_${RUN_ID}.tsv"
   printf 'quant\tsuite\tstatus\tseconds\tresults\n' > "$SUMMARY"
