@@ -6,7 +6,9 @@
 # =============================================================================
 
 # ── 環境 ─────────────────────────────────────────────────────────────────
-REPO_DIR=/home/zephel01/works/project/swe-bench
+#   REPO_DIR の既定は「sweep.sh の1つ上のディレクトリ」。tools/sweep.sh として
+#   置いている限り指定不要。リポジトリ外から呼ぶときだけ有効にする。
+# REPO_DIR="$HOME/path/to/swe-bench"
 LLMBENCH="$REPO_DIR/.venv/bin/llmbench"
 MODEL_DIR=/llm/models/Qwen3.8-27B-GGUF
 MODEL_PREFIX=Qwen3.8-27B
