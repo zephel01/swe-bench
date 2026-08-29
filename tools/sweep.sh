@@ -105,6 +105,16 @@ MAX_TOKENS="${MAX_TOKENS:-}"             # 空=自動 (実効 ctx の 3/4、上�
 MAX_TOKENS_CAP="${MAX_TOKENS_CAP:-49152}"  # thinking モデルでもこれ以上は要らない実測値
                                          # ※ 元の値より小さくするときだけ書き換える
                                          #   (ctx を上げても max_tokens は勝手に増やさない)
+MTP_AUTO="${MTP_AUTO:-1}"                # 1 で MTP の有無を gguf から判定し、
+                                         # MTP を持たないファイルでは
+                                         # --spec-type draft-mtp を自動で外す
+                                         # (付けたまま起動すると llama-server は
+                                         #  "model doesn't contain MTP layers" で
+                                         #  起動に失敗する)。0 で従来どおり素通し
+MTP_SCAN_BYTES="${MTP_SCAN_BYTES:-33554432}"
+                                         # MTP 判定で読む先頭バイト数 (既定 32MiB)。
+                                         # テンソル名は gguf のヘッダに全部あるので
+                                         # ここだけ読めば足りる
 SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-0}"    # 1 で llmbench の preflight を省略
 RESUME="${RESUME:-1}"                    # 1 で完了済み(quant,suite)をスキップ
 DRY_RUN="${DRY_RUN:-0}"                  # 1 でコマンド表示のみ
@@ -350,6 +360,27 @@ health_code() {
 
 port_busy() { [[ "$(health_code)" != "000" ]]; }
 
+# gguf に MTP (nextn) テンソルがあるか。
+#   テンソル名は gguf のヘッダにまとまって置かれているので、先頭だけ読めば分かる。
+#   gguf パッケージも python も要らない。分割 gguf は先頭シャードにヘッダがある。
+gguf_has_mtp() {
+  head -c "$MTP_SCAN_BYTES" "$1" 2>/dev/null | LC_ALL=C grep -qa 'nextn'
+}
+
+# SERVER_ARGS から --spec-type draft-mtp (と --spec-type=draft-mtp) を取り除く
+strip_mtp_args() {
+  local -a out=(); local i n=${#SERVER_ARGS[@]}
+  for ((i = 0; i < n; i++)); do
+    if [[ "${SERVER_ARGS[$i]}" == "--spec-type" && "${SERVER_ARGS[$((i + 1))]:-}" == "draft-mtp" ]]; then
+      i=$((i + 1)); continue
+    fi
+    [[ "${SERVER_ARGS[$i]}" == "--spec-type=draft-mtp" ]] && continue
+    out+=("${SERVER_ARGS[$i]}")
+  done
+  SERVER_ARGS=("${out[@]}")
+}
+
+MTP_USED="-"
 build_server_args() {
   local q="$1" gguf="$2" ov
   SERVER_ARGS=(-m "$gguf" --host "$HOST" --port "$PORT"
@@ -364,6 +395,24 @@ build_server_args() {
   ov="$(deref "OVERRIDE_$(varname "$q")")"
   # shellcheck disable=SC2206
   [[ -n "$ov" ]] && SERVER_ARGS+=($ov)
+
+  # --- MTP (投機デコード) の自動判定 -------------------------------------
+  MTP_USED="-"
+  local a requested=0
+  for a in "${SERVER_ARGS[@]}"; do
+    [[ "$a" == "draft-mtp" || "$a" == "--spec-type=draft-mtp" ]] && requested=1
+  done
+  if (( requested )); then
+    if [[ "$MTP_AUTO" == "1" ]] && ! gguf_has_mtp "$gguf"; then
+      warn "  ⚠️ この gguf に MTP(nextn) テンソルがないため --spec-type draft-mtp を外します"
+      warn "     (付けたままだと llama-server は起動に失敗します)"
+      warn "     速度は MTP 有りの量子化と比較できません。manifest の mtp 列を確認すること"
+      strip_mtp_args
+      MTP_USED="no"
+    else
+      MTP_USED="yes"
+    fi
+  fi
   return 0
 }
 
@@ -373,6 +422,7 @@ start_server() {
   build_server_args "$q" "$gguf"
 
   if [[ "$DRY_RUN" == "1" ]]; then
+    [[ "$MTP_USED" != "-" ]] && log "  MTP: $MTP_USED"
     log "DRY-RUN: $LLAMA_SERVER ${SERVER_ARGS[*]}  > $SERVER_LOG"
     return 0
   fi
@@ -389,6 +439,7 @@ start_server() {
   fi
 
   info "llama-server 起動: $q"
+  [[ "$MTP_USED" != "-" ]] && log "  MTP: $MTP_USED"
   log  "  $LLAMA_SERVER ${SERVER_ARGS[*]}"
   "$LLAMA_SERVER" "${SERVER_ARGS[@]}" >"$SERVER_LOG" 2>&1 &
   SERVER_PID=$!
@@ -496,8 +547,8 @@ PY
     fi
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\n' "$q" "${loaded:-?}" "${n_ctx:-?}" \
-         "${gpu_used:-?}" "${gpu_total:-?}" >> "$OUT_ROOT/manifest_${RUN_ID}.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$q" "${loaded:-?}" "${n_ctx:-?}" \
+         "${gpu_used:-?}" "${gpu_total:-?}" "${MTP_USED:--}" >> "$OUT_ROOT/manifest_${RUN_ID}.tsv"
 }
 
 # =============================================================================
@@ -729,7 +780,7 @@ log "ログ     : $LOG_DIR"
 
 mkdir -p "$OUT_ROOT"
 if [[ "$DRY_RUN" != "1" ]]; then
-  printf 'quant\tmodel_id\tn_ctx\tvram_used_mib\tvram_total_mib\n' > "$OUT_ROOT/manifest_${RUN_ID}.tsv"
+  printf 'quant\tmodel_id\tn_ctx\tvram_used_mib\tvram_total_mib\tmtp\n' > "$OUT_ROOT/manifest_${RUN_ID}.tsv"
   printf 'quant\tsuite\tstatus\tseconds\tresults\n' > "$SUMMARY"
 fi
 

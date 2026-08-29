@@ -174,8 +174,33 @@ RTX 5090 / `Qwen3.8-27B-Uncensored-Q4_K_M` / ctx 65536 / KV f16 での実測:
 | **+ `--spec-type draft-mtp`** | **136.3** | 21,210 MiB |
 
 KV を q8_0 にしても速度はほぼ変わらず（-1%）、MTP は **1.84倍**でした。付け忘れると
-スイープ全体の所要時間がそのまま倍になります。量子化ごとに MTP の有無が違うと比較条件が
-崩れるので、**全量子化で `gguf_probe` を通してから**有効にしてください。
+スイープ全体の所要時間がそのまま倍になります。
+
+#### MTP を持たない gguf は自動で除外する
+
+同じ「Qwen3.8-27B」でも、**MTP を持つファイルと持たないファイルが混在します**
+（実測: Uncensored 版は 4本あり、無印は無し）。持たないファイルに
+`--spec-type draft-mtp` を付けると llama-server は起動に失敗します。
+
+```
+W llama_init_from_model: context type MTP requested but model doesn't contain MTP layers
+E srv    load_model: failed to create MTP context
+```
+
+`MTP_AUTO=1`（既定）なら、起動前に gguf のヘッダを読んで `nextn` テンソルの有無を調べ、
+**無いファイルでは `--spec-type draft-mtp` を自動で外して警告します**（`gguf` パッケージも
+python も不要。先頭 32 MiB だけ読むので18GBのファイルでも一瞬です）。
+
+```
+⚠️ この gguf に MTP(nextn) テンソルがないため --spec-type draft-mtp を外します
+   速度は MTP 有りの量子化と比較できません。manifest の mtp 列を確認すること
+```
+
+どちらで走ったかは `manifest_<実行ID>.tsv` の **`mtp` 列**（`yes` / `no` / `-`）に残ります。
+**MTP の有無が混ざると tok/s は比較できません**（品質スコアは投機デコードでも変わらないので
+比較できます）。レポートを書く前に必ずこの列を確認してください。
+
+`MTP_AUTO=0` にすると判定せず、指定した引数をそのまま渡します（従来動作）。
 
 `--parallel` を上げるときは `CONCURRENCY`（= `llmbench --concurrency`）も同じ値にすること。
 サーバ側とベンチ側で並列数が食い違うと計測条件が揃いません（[USAGE.md](USAGE.md) 8.5章）。

@@ -83,6 +83,13 @@ UBATCH=512
 #     実測 (RTX 5090 / Qwen3.8-27B-Uncensored-Q4_K_M / ctx 65536 / KV f16):
 #         MTP なし  74.6 tok/s  →  MTP あり  136.3 tok/s   (1.84倍)
 #     VRAM は draft 分で +1GB 程度。
+#
+#     ⚠️ 同じ「Qwen3.8-27B」でも MTP を持つファイルと持たないファイルがある
+#        (実測: Uncensored 版は4本あり、無印は無し)。持たないファイルに付けると
+#        llama-server は起動に失敗するが、MTP_AUTO=1 (既定) なら自動で外して
+#        警告し、manifest の mtp 列に yes/no を残す。
+#        → 混在していてもこの行はこのままでよい。ただし mtp 列が混ざったら
+#          tok/s は比較できない (品質スコアは比較できる)。
 SERVER_EXTRA_ARGS="--spec-type draft-mtp"
 
 # ── 大きい量子化だけ条件を落とす (共通引数の後ろに付くので後勝ち) ────────
