@@ -21,6 +21,17 @@
 # LLMBENCH="$REPO_DIR/.venv/bin/llmbench"
 MODEL_DIR=/llm/models/Qwen3.8-27B-GGUF
 MODEL_PREFIX=Qwen3.8-27B
+
+# 結果ラベル / resume 用 state ファイルの接頭辞 (省略可)。
+#   設定すると --label が <接頭辞>-<量子化>-<スイート> になり、state も
+#   sweep_state_<接頭辞>.tsv に分かれる。
+#   同じ量子化で別モデルを比較するとき (例: MTP 版 / 非MTP 版) に使う。
+#   conf を2本用意し、MODEL_PREFIX と LABEL_PREFIX だけ変えて -c で切り替える:
+#     tools/sweep_mtp.conf   … MODEL_PREFIX=<...>-MTP / LABEL_PREFIX=mtp
+#     tools/sweep_nomtp.conf … MODEL_PREFIX=<...>     / LABEL_PREFIX=nomtp
+#   未設定なら従来どおり <量子化>-<スイート> / sweep_state.tsv。
+# LABEL_PREFIX=
+
 LLAMA_SERVER=/usr/local/bin/llama-server
 PORT=8085
 

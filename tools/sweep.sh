@@ -34,6 +34,7 @@ RESULTS_DIR="${RESULTS_DIR:-}"  # 既定: $REPO_DIR/results         (llmbench --
 MODEL_KEY="${MODEL_KEY:-local-openai}"                  # config.yaml の models: キー
 MODEL_DIR="${MODEL_DIR:-/llm/models/Qwen3.8-27B-GGUF}"  # gguf の置き場
 MODEL_PREFIX="${MODEL_PREFIX:-Qwen3.8-27B}"             # <PREFIX>-<QUANT>.gguf
+LABEL_PREFIX="${LABEL_PREFIX:-}"                        # 結果ラベル/state の接頭辞
 LLAMA_SERVER="${LLAMA_SERVER:-llama-server}"            # llama-server のパス
 
 # ── 対象量子化 ───────────────────────────────────────────────────────────
@@ -212,6 +213,13 @@ usage() {
   $SCRIPT_NAME --list
   $SCRIPT_NAME --quants Q4_K_M,Q6_K --suites l7,unc
   RUNS_L7=5 RUN_CULTURE=0 $SCRIPT_NAME
+
+同じ量子化で別モデル (例: MTP 版 / 非MTP 版) を比較するときは、conf を
+分けたうえで LABEL_PREFIX を設定する。結果ラベルが <接頭辞>-<量子化>-<スイート>
+になり、resume 用の state も sweep_state_<接頭辞>.tsv に分かれるため、
+片方の完走がもう片方を「完了済み」と誤判定することがなくなる:
+  $SCRIPT_NAME -c tools/sweep_mtp.conf     # LABEL_PREFIX=mtp   → mtp-Q4_K_M-l6
+  $SCRIPT_NAME -c tools/sweep_nomtp.conf   # LABEL_PREFIX=nomtp → nomtp-Q4_K_M-l6
 EOF
 }
 
@@ -708,7 +716,7 @@ run_suite() {  # quant suite -> 0/1, RESULT_PATH に結果 json
   local q="$1" s="$2"
   local runs args label logf cfg rc started elapsed
   runs="$(suite_runs "$s")"; args="$(suite_args "$s")"
-  label="${q}-${s}"
+  label="${LABEL_PREFIX:+${LABEL_PREFIX}-}${q}-${s}"
   logf="$LOG_DIR/${q}_${s}.log"
   RESULT_PATH=""
 
@@ -772,7 +780,7 @@ run_suite() {  # quant suite -> 0/1, RESULT_PATH に結果 json
 # =============================================================================
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 LOG_DIR="$OUT_ROOT/logs/$RUN_ID"
-STATE_FILE="$OUT_ROOT/sweep_state.tsv"
+STATE_FILE="$OUT_ROOT/sweep_state${LABEL_PREFIX:+_${LABEL_PREFIX}}.tsv"
 SUMMARY="$OUT_ROOT/summary_${RUN_ID}.tsv"
 
 mapfile -t QUANT_LIST < <(resolve_quants)
@@ -789,6 +797,8 @@ if [[ "$DO_LIST" == "1" ]]; then
   echo "OUT_ROOT  : $OUT_ROOT"
   echo "RESULTS   : $RESULTS_DIR"
   echo "MODEL_DIR : $MODEL_DIR"
+  echo "MODEL_PFX : $MODEL_PREFIX"
+  echo "LABEL_PFX : ${LABEL_PREFIX:-(なし)}"
   echo "量子化    : ${QUANT_LIST[*]}"
   echo "スイート  :"
   for s in "${SUITE_LIST[@]}"; do
