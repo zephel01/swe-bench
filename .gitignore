@@ -32,6 +32,8 @@ config.yaml
 
 # sweep のローカル設定 (実パスを書くので追跡しない。例は tools/sweep.conf.example)
 sweep.conf
+# LABEL_PREFIX で分けたバリアント別 conf (tools/sweep_mtp.conf など)
+sweep_*.conf
 
 # ブランチ切り替え時の退避 (uv.lock.mainbak.* など)
 uv.lock.*
