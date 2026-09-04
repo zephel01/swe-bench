@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """llmbench artifacts の「インデント潰れ」を検出する.
 
-llama.cpp の投機デコード (--spec-type draft-mtp) を量子化ターゲットで使うと、
-生成テキストの行頭空白が **深さに関係なく1スペース** に潰れることがある。
+ローカル LLM の生成テキストで、行頭空白が **深さに関係なく1スペース** に
+潰れることがある (Qwopus3.8-27B-Flash Q4_K_M で実測。原因は調査中で、
+投機デコードは条件Aにより棄却済み)。
 llmbench/patch.py の _is_real_code() は ast.parse() を通すため、潰れた出力は
 IndentationError で棄却され、generated/ が空 = 採点前に無条件fail になる。
 スコアだけを見ていると「モデルが解けなかった」と区別できないので、
@@ -116,8 +117,8 @@ def scan(root: Path) -> dict[str, int]:
     if collapsed:
         print(
             f"  ⚠ インデント潰れ {collapsed}/{total} ({collapsed / total:.1%})。"
-            " 投機デコード (--spec-type draft-mtp) と量子化の組み合わせを疑うこと。"
-            " docs/MTP_INDENT_COLLAPSE.md 参照"
+            " このランのスコアはモデルの実力として読めない。"
+            " 切り分け手順は docs/INDENT_COLLAPSE.md 参照"
         )
     return tally
 
