@@ -16,8 +16,13 @@ llama-server に同じプロンプトを N 回投げ、
         gguf の vocab / pre-tokenizer を確認する。
 
 使い方:
+    # llama.cpp (既定): トークンID層まで見る
     python3 tools/probe_indent_tokens.py --url http://localhost:8085 -n 10
-    python3 tools/probe_indent_tokens.py --url http://localhost:8085 -n 10 --temp 0.35
+
+    # vLLM / OpenAI互換: インデント判定のみ (トークンID層は見ない)
+    python3 tools/probe_indent_tokens.py --api openai \
+        --url http://localhost:8000/v1 --model Jackrong/Qwopus3.8-27B-Flash -n 3
+
     python3 tools/probe_indent_tokens.py --self-test     # サーバ不要の内部テスト
 """
 
@@ -82,6 +87,41 @@ def piece_of(url: str, tok: int, cache: dict[int, str], timeout: float) -> str:
         r = post(url, "/detokenize", {"tokens": [tok]}, timeout)
         cache[tok] = r.get("content", "")
     return cache[tok]
+
+
+def run_probe_openai(args: argparse.Namespace) -> int:
+    """OpenAI互換 (vLLM等) 版. /detokenize が無いのでインデント判定のみ."""
+    if not args.model:
+        print("ERROR: --api openai には --model が必要 (例 --model Jackrong/...)",
+              file=sys.stderr)
+        return 2
+    tally: dict[str, int] = {}
+    for i in range(1, args.n + 1):
+        r = post(args.url, "/chat/completions", {
+            "model": args.model,
+            "messages": [{"role": "user", "content": args.prompt}],
+            "max_tokens": args.n_predict,
+            "temperature": args.temp,
+        }, args.timeout)
+        content = r["choices"][0]["message"].get("content") or ""
+        v = verdict_for(content)
+        tally[v] = tally.get(v, 0) + 1
+        n1, n4 = indent_stats(content)
+        print(f"  #{i:<3} {v:<10} [1sp={n1} 4sp={n4}]")
+        if v != "ok" and args.show:
+            print("    ---- content ----")
+            for ln in content.splitlines()[: args.show]:
+                print(f"    |{ln}")
+
+    total = sum(tally.values())
+    print("\n  ---- " + ", ".join(f"{k}={v}" for k, v in sorted(tally.items())))
+    collapsed = tally.get("COLLAPSED", 0) + tally.get("MIXED", 0)
+    print(f"  潰れ発生率: {collapsed}/{total}")
+    if collapsed:
+        print("  → GGUF を介さない経路でも潰れる。**モデル本体の挙動** (H3a)")
+    else:
+        print("  → この経路では潰れない。**llama.cpp の GGUF 変換バグ** (H3b)")
+    return 1 if collapsed else 0
 
 
 def run_probe(args: argparse.Namespace) -> int:
@@ -151,8 +191,8 @@ def run_probe(args: argparse.Namespace) -> int:
               " → デトークナイズ/集約側 (H2) を疑う")
     elif collapsed:
         print("  → トークンIDの段階で既に単一スペース。デトークナイズ側ではなく"
-              " **モデル/量子化がそのトークンを選んでいる** (H1/H3)。"
-              " 別量子化 (HF配布 Q5_K_M) と、同じサーバで別モデルを試すこと")
+              " モデルがそのトークンを選んでいる。量子化・プロンプト非依存なら"
+              " モデルの学習された挙動 (docs/INDENT_COLLAPSE.md 参照)")
     if other_mismatches:
         print(f"  (参考) 空白以外の差が {other_mismatches}/{total} 回。"
               " 特殊トークン (<think> 等) の表示差なら無視してよい")
@@ -180,6 +220,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://localhost:8085")
+    ap.add_argument("--api", choices=("llamacpp", "openai"), default="llamacpp",
+                    help="openai: vLLM等のOpenAI互換 /chat/completions を叩く")
+    ap.add_argument("--model", default="", help="--api openai のときのモデル名")
     ap.add_argument("-n", type=int, default=10, help="試行回数 (既定10)")
     ap.add_argument("--temp", type=float, default=0.0)
     ap.add_argument("--n-predict", type=int, default=512)
@@ -192,9 +235,9 @@ def main() -> int:
     if args.self_test:
         return self_test()
     try:
-        return run_probe(args)
+        return run_probe_openai(args) if args.api == "openai" else run_probe(args)
     except (urllib.error.HTTPError, urllib.error.URLError) as e:
-        print(f"ERROR: llama-server に到達できない ({args.url}): {e}", file=sys.stderr)
+        print(f"ERROR: サーバに到達できない ({args.url}): {e}", file=sys.stderr)
         return 2
 
 
