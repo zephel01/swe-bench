@@ -151,8 +151,8 @@ def run_probe(args: argparse.Namespace) -> int:
               " → デトークナイズ/集約側 (H2) を疑う")
     elif collapsed:
         print("  → トークンIDの段階で既に単一スペース。デトークナイズ側ではなく"
-              " **モデル/量子化がそのトークンを選んでいる** (H1/H3)。"
-              " 別量子化 (HF配布 Q5_K_M) と、同じサーバで別モデルを試すこと")
+              " モデルがそのトークンを選んでいる。量子化・プロンプト非依存なら"
+              " モデルの学習された挙動 (docs/INDENT_COLLAPSE.md 参照)")
     if other_mismatches:
         print(f"  (参考) 空白以外の差が {other_mismatches}/{total} 回。"
               " 特殊トークン (<think> 等) の表示差なら無視してよい")
