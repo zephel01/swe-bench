@@ -26,6 +26,7 @@
 | モデル追加からレポートまでを一気通貫で回したい | [AUTOMATION.md](AUTOMATION.md) |
 | 長いランを無人で流し、途中で止まっても再開したい | [AUTOMATION.md](AUTOMATION.md) 4章 |
 | 比較条件が揃っているかを確認したい | [AUTOMATION.md](AUTOMATION.md) 5章 |
+| 投機デコード等で生成コードが壊れていないか確かめたい | [MTP_INDENT_COLLAPSE.md](MTP_INDENT_COLLAPSE.md) |
 | いつ何が変わったか調べたい | [CHANGES.md](CHANGES.md) |
 
 ---
