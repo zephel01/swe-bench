@@ -14,8 +14,16 @@ GGUF を一切経由しない経路。llama.cpp 側 (tools/probe_indent_tokens.p
   * id 220 ' ' に潰す (1スペース)
       → 重みが犯人 (H3a)
 
-メモリ: 27B を bf16 で載せると約54GB。足りなければ device_map="auto" が
-CPU にオフロードする (遅いが3回生成するだけなので問題ない)。
+メモリ: 27B を bf16 で載せると約56GB。RAM も足りないと **disk にオフロードされ**、
+1トークンごとに SSD を読み直すので実用的な時間で終わらない
+("offloaded to the cpu and disk" と出たら諦めて 4bit に切り替えること)。
+
+    python3 tools/probe_indent_transformers.py --load-in-4bit -n 1 --max-new-tokens 256
+
+4bit (bitsandbytes) でも切り分けとしては成立する。目的は「量子化を避けること」ではなく
+**llama.cpp の GGUF 変換を迂回すること**であり、bnb は safetensors を別系統の
+コードパスでその場で量子化するため GGUF 変換を通らない。量子化ビット数が原因でない
+ことは GGUF の Q4 と Q5 がバイト一致した時点で確認済み (docs 4.8)。
 """
 
 from __future__ import annotations
@@ -41,16 +49,36 @@ def run(args: argparse.Namespace) -> int:
         print(f"ERROR: transformers/torch が入っていない: {e}", file=sys.stderr)
         return 2
 
-    print(f"  loading {args.model} (dtype={args.dtype}, device_map={args.device_map}) ...")
+    quant = None
+    if args.load_in_4bit or args.load_in_8bit:
+        try:
+            from transformers import BitsAndBytesConfig
+        except ImportError as e:
+            print(f"ERROR: BitsAndBytesConfig が使えない: {e}", file=sys.stderr)
+            return 2
+        quant = BitsAndBytesConfig(
+            load_in_4bit=args.load_in_4bit,
+            load_in_8bit=args.load_in_8bit,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+        )
+        print("  ※ bitsandbytes で量子化ロード。GGUF 変換は通らないので"
+              " H3a/H3c の切り分けとしては成立する (docs 4.8)")
+
+    label = "4bit" if args.load_in_4bit else "8bit" if args.load_in_8bit else args.dtype
+    print(f"  loading {args.model} ({label}, device_map={args.device_map}) ...")
     tok = AutoTokenizer.from_pretrained(
         args.model, trust_remote_code=args.trust_remote_code
     )
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        dtype=getattr(torch, args.dtype),
-        device_map=args.device_map,
-        trust_remote_code=args.trust_remote_code,
-    )
+    kwargs = {
+        "device_map": args.device_map,
+        "trust_remote_code": args.trust_remote_code,
+    }
+    if quant is not None:
+        kwargs["quantization_config"] = quant
+    else:
+        kwargs["dtype"] = getattr(torch, args.dtype)
+    model = AutoModelForCausalLM.from_pretrained(args.model, **kwargs)
     model.eval()
 
     text = tok.apply_chat_template(
@@ -114,11 +142,15 @@ def main() -> int:
     ap.add_argument("--model", default="Jackrong/Qwopus3.8-27B-Flash")
     ap.add_argument("-n", type=int, default=3)
     ap.add_argument("--temp", type=float, default=0.0, help="0 で greedy")
-    ap.add_argument("--max-new-tokens", type=int, default=512)
+    ap.add_argument("--max-new-tokens", type=int, default=256)
     ap.add_argument("--dtype", default="bfloat16",
                     choices=("bfloat16", "float16", "float32"))
     ap.add_argument("--device-map", default="auto")
     ap.add_argument("--trust-remote-code", action="store_true")
+    ap.add_argument("--load-in-4bit", action="store_true",
+                    help="bitsandbytes 4bit でロード (disk オフロード回避)")
+    ap.add_argument("--load-in-8bit", action="store_true",
+                    help="bitsandbytes 8bit でロード")
     ap.add_argument("--prompt", default=DEFAULT_PROMPT)
     ap.add_argument("--show", type=int, default=0, metavar="N")
     ap.add_argument("--self-test", action="store_true")
