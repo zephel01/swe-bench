@@ -45,7 +45,17 @@ RUN_L6=1;      RUNS_L6=5           # llmbench run --with-l6      --runs 5
 RUN_L7=1;      RUNS_L7=3           # llmbench run --only-l7      --runs 3
 RUN_CULTURE=1; RUNS_CULTURE=3      # llmbench run --only-culture --lang ja --runs 3
 RUN_UNC=1;     RUNS_UNC=3          # llmbench run --only-unc     --runs 3
-SUITE_ORDER="l6 l7 culture unc"
+RUN_SEC=0;     RUNS_SEC=3          # llmbench run --only-sec     --runs 3
+RUN_SECAUG=0;  RUNS_SECAUG=3       # llmbench run --only-secaug  --runs 3
+RUN_GEN=0;     RUNS_GEN=3          # llmbench run --only-gen     --runs 3
+RUN_MED=0;     RUNS_MED=3          # llmbench run --only-med --lang ja --runs 3
+RUN_WRITE=0;   RUNS_WRITE=1        # llmbench run --only-write   --runs 1
+SUITE_ORDER="l6 l7 culture unc sec secaug gen med write"
+
+# スイート別の思考上限 (config の reasoning_max_tokens を一時 config で上書き)
+# REASONING_MAX_TOKENS_SEC=32768
+# REASONING_MAX_TOKENS_SECAUG=32768
+# POST_SEC_CLASSIFY=1               # sec/secaug 完了後に tools/sec_classify.py で分類
 
 # ── llama-server 共通引数 ────────────────────────────────────────────────
 #
