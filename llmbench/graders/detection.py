@@ -226,6 +226,17 @@ class DetectionGrader(Grader):
                 "decoy": n_gold == 0,
             }
         }
+        # 出力から findings を取り出せなかった試行は、指標に関係なく不合格。
+        # デコイ (gold 0件) では「予測0件」が正解と同じ形になるため、ここで
+        # 止めないと空出力・思考打ち切り (reasoning_loop / reasoning_budget)
+        # が recall 1.0 / FP 0 として合格してしまう (2026-09-27 実測で4件)。
+        if not ok:
+            ev.resolved = False
+            ev.quality_score = 0.0
+            ev.components["detection"]["no_output"] = True
+            ev.fail_reason = f"no findings output ({err})"
+            ev.detail_output = f"no findings output ({err})"
+            return ev
         missed = [g.get("id") or g.get("cwe") or "?" for g in gold if g not in covered]
         neutral_note = f" NEUTRAL={len(neutral)}" if neutral else ""
         ev.detail_output = (
