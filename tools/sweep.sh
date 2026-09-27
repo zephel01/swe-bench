@@ -3,7 +3,8 @@
 #  llmbench 量子化スイープ  —  llama-server の起動 → ベンチ実行 → 停止 を自動化
 #
 #  1量子化ごとに llama-server を起動し、有効化したスイート (l6 / l7 / culture /
-#  unc) を順に走らせ、サーバを落として次の量子化へ進む。
+#  unc / sec / secaug / gen / med / write) を順に走らせ、サーバを落として次の
+#  量子化へ進む。
 #
 #  使い方:  cp tools/sweep.conf.example tools/sweep.conf   # 実パスを書く (git管理外)
 #           tools/sweep.sh --list         # 実行対象を確認するだけ
@@ -61,7 +62,43 @@ RUN_UNC="${RUN_UNC:-1}"                                 # over-refusal 検査の
 RUNS_UNC="${RUNS_UNC:-3}"
 ARGS_UNC="${ARGS_UNC:---only-unc}"
 
-SUITE_ORDER="${SUITE_ORDER:-l6 l7 culture unc}"         # 実行順 (RUN_*=0 は飛ばす)
+# ── ドメインスイート (既定はすべて無効。RUN_*=1 で有効化) ─────────────────
+RUN_SEC="${RUN_SEC:-0}"                                 # security 検出 17問
+RUNS_SEC="${RUNS_SEC:-3}"
+ARGS_SEC="${ARGS_SEC:---only-sec}"
+
+RUN_SECAUG="${RUN_SECAUG:-0}"                           # security 摂動変種 34問
+RUNS_SECAUG="${RUNS_SECAUG:-3}"
+ARGS_SECAUG="${ARGS_SECAUG:---only-secaug}"
+
+RUN_GEN="${RUN_GEN:-0}"                                 # 一般の指示追従
+RUNS_GEN="${RUNS_GEN:-3}"
+ARGS_GEN="${ARGS_GEN:---only-gen}"
+
+RUN_MED="${RUN_MED:-0}"                                 # 医療QA (参考値)
+RUNS_MED="${RUNS_MED:-3}"
+ARGS_MED="${ARGS_MED:---only-med --lang ja}"
+
+RUN_WRITE="${RUN_WRITE:-0}"                             # 創作 (judge 採点, experimental)
+RUNS_WRITE="${RUNS_WRITE:-1}"
+ARGS_WRITE="${ARGS_WRITE:---only-write}"
+
+SUITE_ORDER="${SUITE_ORDER:-l6 l7 culture unc sec secaug gen med write}"  # 実行順 (RUN_*=0 は飛ばす)
+#   SUITE_ORDER に無いが RUN_*=1 のスイートは、警告を出して末尾に追加する。
+
+# ── スイート別の思考上限 (reasoning_max_tokens) ───────────────────────────
+#   REASONING_MAX_TOKENS_<SUITE>=N で、そのスイートだけ config の
+#   models.<MODEL_KEY>.reasoning_max_tokens を N に書き換えた一時 config で走らせる。
+#   空なら config.yaml の値のまま。
+#   実測 (OrcaSAQ-2-27B / sec): 16384 で s14 が思考打ち切り → 32768 で合格。
+#   ⚠️ max_tokens (実効 ctx で下げた後の値) を超える値は効かないので警告する。
+# REASONING_MAX_TOKENS_SEC=32768
+# REASONING_MAX_TOKENS_SECAUG=32768
+
+# ── 実行後処理 ──────────────────────────────────────────────────────────
+POST_SEC_CLASSIFY="${POST_SEC_CLASSIFY:-1}"  # 1 で sec/secaug 完了後に
+                                             # tools/sec_classify.py を走らせ、
+                                             # logs/<RUN_ID>/<量子化>_<スイート>_classify.txt に保存
 
 # ── llama-server 共通引数 ────────────────────────────────────────────────
 HOST="${HOST:-127.0.0.1}"
@@ -327,10 +364,29 @@ gguf_path() {
   return 1
 }
 
+KNOWN_SUITES="l6 l7 culture unc sec secaug gen med write"
+
+# SUITE_ORDER + (SUITE_ORDER に無いが有効化/指定されたもの) を返す。
+# 古い sweep.conf が SUITE_ORDER="l6 l7 culture unc" のままでも、
+# RUN_SEC=1 や --suites sec が黙って無視されないようにする。
+suite_order_effective() {
+  local s order extra=""
+  order="$(list_to_words "$SUITE_ORDER")"
+  for s in $KNOWN_SUITES $(list_to_words "$CLI_SUITES"); do
+    printf '%s\n' $order $extra | grep -qx "$s" && continue
+    if [[ "$(deref "RUN_$(varname "$s")")" == "1" ]] \
+       || printf '%s\n' $(list_to_words "$CLI_SUITES") | grep -qx "$s"; then
+      extra="$extra $s"
+      warn "スイート '$s' は SUITE_ORDER に無いが有効なので末尾に追加する (SUITE_ORDER=\"$SUITE_ORDER\")"
+    fi
+  done
+  printf '%s\n' $order $extra
+}
+
 resolve_suites() {
   local s u want=() sel=""
   [[ -n "$CLI_SUITES" ]] && sel="$(list_to_words "$CLI_SUITES")"
-  for s in $(list_to_words "$SUITE_ORDER"); do
+  for s in $(suite_order_effective); do
     u="$(varname "$s")"
     if [[ -n "$sel" ]]; then
       # --suites 指定時はそこに載っているものだけ
@@ -341,6 +397,7 @@ resolve_suites() {
     if [[ -n "$CLI_SKIP" ]] && printf '%s\n' $(list_to_words "$CLI_SKIP") | grep -qx "$s"; then
       continue
     fi
+    [[ -n "$(deref "ARGS_$(varname "$s")")" ]] || die "未知のスイート '$s' (ARGS_$(varname "$s") が未定義)"
     want+=("$s")
   done
   printf '%s\n' "${want[@]:-}"
@@ -646,9 +703,13 @@ auto_max_tokens() {
 CONFIG_NOTE=""
 CONFIG_PATH=""
 config_for() {   # 結果は CONFIG_PATH / CONFIG_NOTE に入れる (サブシェルにしない)
-  local q="$1" runs="$2"
-  local strip=0 ctx mt cur out tag
+  local q="$1" runs="$2" suite="${3:-}"
+  local strip=0 ctx mt cur out tag rmt="" mt_eff
   CONFIG_NOTE=""
+  [[ -n "$suite" ]] && rmt="$(deref "REASONING_MAX_TOKENS_$(varname "$suite")")"
+  if [[ -n "$rmt" && ! "$rmt" =~ ^[0-9]+$ ]]; then
+    die "REASONING_MAX_TOKENS_$(varname "$suite")=$rmt は整数でない"
+  fi
   [[ -f "$CONFIG" ]] || die "config が無い: $CONFIG"
 
   if [[ "$STRIP_SEED_FOR_MULTIRUN" == "1" && "${runs:-1}" -gt 1 ]]; then strip=1; fi
@@ -662,16 +723,43 @@ config_for() {   # 結果は CONFIG_PATH / CONFIG_NOTE に入れる (サブシ�
     if [[ -n "$cur" ]] && (( cur <= mt )); then mt=""; fi
   fi
 
-  if (( strip == 0 )) && [[ -z "$mt" ]]; then
+  if [[ -n "$rmt" ]]; then
+    mt_eff="${mt:-$(config_max_tokens)}"
+    if [[ -n "$mt_eff" ]] && (( rmt >= mt_eff )); then
+      warn "  REASONING_MAX_TOKENS_$(varname "$suite")=$rmt が max_tokens=$mt_eff 以上。本文を書く余地が無い"
+    fi
+  fi
+
+  if (( strip == 0 )) && [[ -z "$mt" && -z "$rmt" ]]; then
     CONFIG_PATH="$CONFIG"; return 0
   fi
 
   tag="$(varname "$q")"; (( strip )) && tag="${tag}_noseed"
+  [[ -n "$rmt" ]] && tag="${tag}_$(varname "$suite")_r${rmt}"
   out="$OUT_ROOT/config_${tag}.yaml"
-  awk -v key="$MODEL_KEY" -v strip="$strip" -v mt="$mt" '
+  # MODEL_KEY ブロックに reasoning_max_tokens が既にあるか (無ければキー行の直後に足す)
+  local rhas=0
+  if [[ -n "$rmt" ]] && awk -v key="$MODEL_KEY" '
+      /^[^[:space:]#]/                { inblk = 0 }
+      $0 ~ "^  " key ":[[:space:]]*$" { inblk = 1; next }
+      inblk && /^  [A-Za-z0-9_.\-]+:[[:space:]]*$/ { inblk = 0 }
+      inblk && /^[[:space:]]*reasoning_max_tokens:/ { found = 1 }
+      END { exit !found }' "$CONFIG"; then
+    rhas=1
+  fi
+  awk -v key="$MODEL_KEY" -v strip="$strip" -v mt="$mt" -v rmt="$rmt" -v rhas="$rhas" '
     /^[^[:space:]#]/                { inblk = 0 }
-    $0 ~ "^  " key ":[[:space:]]*$" { inblk = 1; print; next }
+    $0 ~ "^  " key ":[[:space:]]*$" {
+      inblk = 1; print
+      if (rmt != "" && rhas == 0) print "    reasoning_max_tokens: " rmt "   # sweep.sh: スイート別に追加"
+      next
+    }
     inblk && /^  [A-Za-z0-9_.\-]+:[[:space:]]*$/ { inblk = 0 }
+    inblk && rmt != "" && match($0, /^[[:space:]]*reasoning_max_tokens:[[:space:]]*[0-9]+/) {
+      indent = $0; sub(/[^[:space:]].*$/, "", indent)
+      print indent "reasoning_max_tokens: " rmt "   # sweep.sh: スイート別に書き換え"
+      next
+    }
     inblk && strip == 1 && /^[[:space:]]*seed:/ {
       print "#" $0 "   # sweep.sh: runs>1 のため無効化"; next
     }
@@ -686,6 +774,11 @@ config_for() {   # 結果は CONFIG_PATH / CONFIG_NOTE に入れる (サブシ�
   if (( strip )); then CONFIG_NOTE="seed 無効化"; fi
   if [[ -n "$mt" ]]; then
     CONFIG_NOTE="${CONFIG_NOTE:+$CONFIG_NOTE / }max_tokens ${cur:-?} → $mt (ctx $ctx)"
+  fi
+  if [[ -n "$rmt" ]]; then
+    CONFIG_NOTE="${CONFIG_NOTE:+$CONFIG_NOTE / }reasoning_max_tokens → $rmt ($suite)"
+    grep -Eq "^[[:space:]]*reasoning_max_tokens:[[:space:]]*${rmt}([^0-9]|$)" "$out" \
+      || die "一時 config に reasoning_max_tokens: $rmt を書けなかった ($out)"
   fi
   CONFIG_PATH="$out"
 }
@@ -710,6 +803,28 @@ summary_put() {  # quant suite status seconds results_path
 }
 
 # =============================================================================
+#  実行後処理
+# =============================================================================
+# sec / secaug の結果を失敗モード別に分類して保存する。失敗しても sweep は止めない。
+post_classify() {
+  local q="$1" s="$2" out py
+  [[ "$POST_SEC_CLASSIFY" == "1" ]] || return 0
+  case "$s" in sec|secaug) ;; *) return 0 ;; esac
+  [[ -n "$RESULT_PATH" ]] || { warn "  分類スキップ: 結果パス不明"; return 0; }
+  local rp="$RESULT_PATH"
+  [[ "$rp" = /* ]] || rp="$REPO_DIR/$rp"
+  [[ -f "$rp" ]] || { warn "  分類スキップ: $rp が無い"; return 0; }
+  py="$(dirname "$LLMBENCH")/python"; [[ -x "$py" ]] || py=python3
+  out="$LOG_DIR/${q}_${s}_classify.txt"
+  if "$py" "$REPO_DIR/tools/sec_classify.py" "$rp" > "$out" 2>&1; then
+    log "  分類: $out"
+    grep -E '^成功率|^補正後に失敗' "$out" | sed 's/^/     /' || true
+  else
+    warn "  分類に失敗 (sweep は続行): $out"
+  fi
+}
+
+# =============================================================================
 #  1スイート実行
 # =============================================================================
 run_suite() {  # quant suite -> 0/1, RESULT_PATH に結果 json
@@ -720,7 +835,7 @@ run_suite() {  # quant suite -> 0/1, RESULT_PATH に結果 json
   logf="$LOG_DIR/${q}_${s}.log"
   RESULT_PATH=""
 
-  config_for "$q" "$runs"
+  config_for "$q" "$runs" "$s"
   cfg="$CONFIG_PATH"
   if [[ "$cfg" != "$CONFIG" ]]; then
     log "  config: $(basename "$cfg")  [${CONFIG_NOTE:-一時config}]"
@@ -764,6 +879,7 @@ run_suite() {  # quant suite -> 0/1, RESULT_PATH に結果 json
 
   if [[ $rc -eq 0 ]]; then
     log "  ✅ $q / $s  $(hms "$elapsed")  ${RESULT_PATH:-(結果パス不明)}"
+    post_classify "$q" "$s"
   else
     err "  ❌ $q / $s  rc=$rc  $(hms "$elapsed")  ログ: $logf"
     if [[ $rc -eq 2 ]] && grep -qa "preflight が FAIL" "$logf" 2>/dev/null; then
@@ -802,7 +918,9 @@ if [[ "$DO_LIST" == "1" ]]; then
   echo "量子化    : ${QUANT_LIST[*]}"
   echo "スイート  :"
   for s in "${SUITE_LIST[@]}"; do
-    printf '  %-8s runs=%-3s %s\n' "$s" "$(suite_runs "$s")" "$(suite_args "$s")"
+    r="$(deref "REASONING_MAX_TOKENS_$(varname "$s")")"
+    printf '  %-8s runs=%-3s %s%s\n' "$s" "$(suite_runs "$s")" "$(suite_args "$s")" \
+      "${r:+   [reasoning_max_tokens=$r]}"
   done
   echo "合計      : $(( ${#QUANT_LIST[@]} * ${#SUITE_LIST[@]} )) 実行"
   exit 0

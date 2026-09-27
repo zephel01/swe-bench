@@ -62,13 +62,55 @@ clone 先を問わず書き換え不要です。`LLMBENCH` / `CONFIG` / `TASKS_D
 | `l7` | `llmbench run --model local-openai --only-l7` | 3 |
 | `culture` | `llmbench run --model local-openai --only-culture --lang ja` | 3 |
 | `unc` | `llmbench run --model local-openai --only-unc` | 3 |
+| `sec` | `llmbench run --model local-openai --only-sec` | 3 |
+| `secaug` | `llmbench run --model local-openai --only-secaug` | 3 |
+| `gen` | `llmbench run --model local-openai --only-gen` | 3 |
+| `med` | `llmbench run --model local-openai --only-med --lang ja` | 3 |
+| `write` | `llmbench run --model local-openai --only-write` | 1 |
+
+`sec` 以降のドメインスイートは**既定で無効**（`RUN_SEC=1` などで有効化）。既定値のままの
+conf では従来の4スイートだけが走ります。
 
 runs は `RUNS_L6` / `RUNS_L7` / `RUNS_CULTURE` / `RUNS_UNC` で個別に、`--runs N` で全部まとめて
 変えられます。台帳フラグ自体を変えたいときは `ARGS_L7="--only-l7 --with-sec"` のように
 `ARGS_*` を書き換えます。
 
 スイートを増やすときは `RUN_<名前>` / `RUNS_<名前>` / `ARGS_<名前>` の3つを足して
-`SUITE_ORDER` に名前を追加するだけです（例: `RUN_SEC=1 RUNS_SEC=3 ARGS_SEC="--only-sec"`）。
+`SUITE_ORDER` に名前を追加します。
+
+> [!NOTE]
+> 古い conf が `SUITE_ORDER="l6 l7 culture unc"` のままでも、`RUN_SEC=1` や
+> `--suites sec` で有効にしたスイートは**警告を出して末尾に追加**します（黙って無視しない）。
+> `ARGS_<名前>` が定義されていないスイート名を `--suites` に書くとエラーで止まります。
+
+### セキュリティ（サイバー）系を回す
+
+```bash
+cp tools/sweep.conf.orca-sec.example tools/sweep.conf   # または -c で直接指定
+tools/sweep.sh --list        # sec / secaug と reasoning_max_tokens の上書きが表示される
+tools/sweep.sh --dry-run
+tools/sweep.sh
+```
+
+**スイート別の思考上限**: `REASONING_MAX_TOKENS_<スイート>=N` を書くと、そのスイートだけ
+`models.<MODEL_KEY>.reasoning_max_tokens` を N にした一時 config
+（`_OUTPUTS/sweep/config_<量子化>_<スイート>_r<N>.yaml`）で走らせます。キーが無い
+モデルブロックにはキー行の直後に追加します。`max_tokens` 以上の値は本文を書く余地が
+無いので警告します。
+
+> 実測（OrcaSAQ-2-27B-Uncensored / `--only-sec`）: `reasoning_max_tokens: 16384` では
+> s14（4件の本命）が思考のまま打ち切られて不合格、32768 では 10,710 tok で合格。
+> 一方、安全なコード（デコイ）では 32768 でも考え切れずに打ち切られる課題が 16問中4問あった。
+
+**実行後の分類**: `POST_SEC_CLASSIFY=1`（既定）なら `sec` / `secaug` の完了後に
+`tools/sec_classify.py` を走らせ、`logs/<実行ID>/<量子化>_<スイート>_classify.txt` に
+失敗モード（見逃し / デコイ過検出 / 思考打ち切り の種類 / 出力なし合格 など）を保存し、
+成功率の行だけ画面にも出します。分類に失敗しても sweep は止めません。
+
+```bash
+python3 tools/sec_classify.py results/<...>_results.json   # 単体でも使える
+python3 tools/sec_classify.py --scan results/              # 全結果から「出力なしで合格」を探す
+```
 
 ---
 
@@ -281,6 +323,8 @@ seed には触りません。
 | 条件の一覧 | `_OUTPUTS/sweep/manifest_<実行ID>.tsv`（量子化 / モデルID / n_ctx / VRAM 使用・総量 MiB） |
 | サマリ | `_OUTPUTS/sweep/summary_<実行ID>.tsv` + 標準出力の表 |
 | 進捗（resume用） | `_OUTPUTS/sweep/sweep_state.tsv` |
+| sec/secaug の分類 | `_OUTPUTS/sweep/logs/<実行ID>/<量子化>_{sec,secaug}_classify.txt` |
+| スイート別 config | `_OUTPUTS/sweep/config_<量子化>[_noseed]_<スイート>_r<N>.yaml`（`REASONING_MAX_TOKENS_*` 指定時） |
 
 `manifest_*.tsv` は「その量子化で本当に何がロードされ、n_ctx はいくつだったか」を
 サーバの `/props` `/v1/models` から取って残したものです。量子化間の比較は**推論条件が
@@ -374,6 +418,11 @@ WARN は、`runs>1` のために意図的に seed を外しているぶんなの
 `results.json` を吐く偽 `llmbench`）で、対象解決・通し実行・gguf 不在・サーバ起動失敗・
 スイート異常終了・実行中の SIGINT・resume・conf 上書き・seed 無効化の切り替わりを確認済み
 （2026-08-29 / 15ケース）。
+
+ドメインスイート追加分（2026-09-27）: 偽 `llama-server`（`/health` 200）+ `mock-gold` で
+`sec` / `secaug` の通し実行・分類ファイル出力・resume、`--list` / `--dry-run`、
+旧 `SUITE_ORDER` での自動追加、未知スイート名のエラー、`REASONING_MAX_TOKENS_*` の
+書き換え（キーあり）/ 追加（キーなし）/ 非整数エラー / `max_tokens` 超過警告を確認済み。
 
 **実 `llama-server` と実 gguf を使った通し実行は未検証**です。初回は
 `--list` → `--dry-run` → 量子化1つ + スイート1つ、の順で試してください。

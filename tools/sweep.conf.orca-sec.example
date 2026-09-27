@@ -1,0 +1,41 @@
+# =============================================================================
+#  sweep.sh 設定例: セキュリティ (サイバー) 系モデルを sec / secaug で回す
+#
+#    cp tools/sweep.conf.orca-sec.example tools/sweep.conf
+#    tools/sweep.sh --list && tools/sweep.sh --dry-run && tools/sweep.sh
+#
+#  例は OrcaSAQ-2-27B-Uncensored (量子化名がファイル名に無い単一 gguf)。
+#    <MODEL_DIR>/<MODEL_PREFIX>-<QUANTS>.gguf
+#      = .../OrcaSAQ-2-Cyber-27B-Uncensored-GGUF/OrcaSAQ-2-27B-Uncensored.gguf
+# =============================================================================
+
+MODEL_DIR="$HOME/llm/models/OrcaSAQ-2-Cyber-27B-Uncensored-GGUF"
+MODEL_PREFIX=OrcaSAQ-2-27B
+QUANTS=Uncensored
+LABEL_PREFIX=orca
+LLAMA_SERVER="$HOME/llm/apps/llama.cpp/build-cuda/bin/llama-server"
+PORT=8085
+
+# ── スイート ─────────────────────────────────────────────────────────────
+RUN_L6=0; RUN_L7=0; RUN_CULTURE=0; RUN_UNC=0
+RUN_SEC=1;    RUNS_SEC=3
+RUN_SECAUG=1; RUNS_SECAUG=3
+SUITE_ORDER="sec secaug"
+
+# 16384 だと s14 (本命4件) が思考のまま打ち切られた実測あり
+REASONING_MAX_TOKENS_SEC=32768
+REASONING_MAX_TOKENS_SECAUG=32768
+POST_SEC_CLASSIFY=1
+
+# ── llama-server ─────────────────────────────────────────────────────────
+NGL=99
+FLASH_ATTN=on
+CTX=65536
+PARALLEL=1
+# 思考を reasoning_content に分離する (Qwen3 系 chat template)
+SERVER_EXTRA_ARGS="--jinja --reasoning-format deepseek"
+# MTP を持つ gguf なら追加 (無ければ MTP_AUTO が外す):
+# SERVER_EXTRA_ARGS="--jinja --reasoning-format deepseek --spec-type draft-mtp"
+
+HEALTH_TIMEOUT=1200
+VRAM_SETTLE=15
